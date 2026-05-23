@@ -1,354 +1,377 @@
 -- poker/player.lua
--- Texas Hold'em player terminal for CCCasino
--- Hardware: 1h×2w monitor, wireless modem
--- Run: player.lua <player_number>   (1..4)
+-- Texas Hold'em — private player terminal
+-- Monitor: 2w x 1h, attached to THIS computer
+-- Modem:   wireless, listens ch11, sends to ch10
+-- Run: player <number>    (1, 2, 3, or 4)
 
 local pid = tonumber(arg and arg[1])
-assert(pid, "Usage: player.lua <player_number>")
+assert(pid and pid>=1 and pid<=4, "Usage: player <1-4>")
 
-local BCAST_CH  = 11  -- listen for dealer broadcasts
-local DEALER_CH = 10  -- send to dealer
+local BCAST_CH  = 11
+local DEALER_CH = 10
 
-math.randomseed(os.epoch("utc"))
-
--- ── Peripherals ──────────────────────────────────────────────────────────────
+-- ── Peripherals ───────────────────────────────────────────────
 local mon = peripheral.find("monitor")
-assert(mon, "Attach a 1h×2w monitor to this computer")
+assert(mon, "No monitor found")
 mon.setTextScale(0.5)
 local W, H = mon.getSize()
 
 local modem = peripheral.find("modem")
-assert(modem, "Attach a wireless modem to this computer")
+assert(modem, "No modem found")
 modem.open(BCAST_CH)
 
--- ── Player state ─────────────────────────────────────────────────────────────
-local state = {
-    hand        = {},         -- {card,card}
-    community   = {},
-    phase       = "waiting",
-    chips       = 500,
-    pot         = 0,
-    bets        = {},
-    active      = {},
-    turn        = 0,
-    call_amount = 0,
+-- ── State ─────────────────────────────────────────────────────
+local S = {
+    hand          = {},
+    community     = {},
+    phase         = "waiting",
+    chips         = 500,
+    pot           = 0,
+    bets          = {},
+    active        = {},
+    turn          = 0,
+    call_amount   = 0,
+    current_bet   = 0,
     valid_actions = {},
     result_lines  = {},
-    all_hands     = {},       -- revealed hands at showdown
-    current_bet   = 0,
+    all_hands     = {},
+    -- raise input
+    raise_mode    = false,
+    raise_digits  = "",
+    raise_min     = 0,
 }
 
-local raise_input = ""   -- digits typed for a raise amount
-local entering_raise = false
+-- ── Send ──────────────────────────────────────────────────────
+local function send(msg)
+    msg.player=pid
+    modem.transmit(DEALER_CH,BCAST_CH,textutils.serialize(msg))
+end
 
--- ── Drawing helpers ──────────────────────────────────────────────────────────
-local SUIT_SYM = {H="\xe2\x99\xa5",D="\xe2\x99\xa6",C="\xe2\x99\xa3",S="\xe2\x99\xa0"}
-local SUIT_COL = {H=colors.red,D=colors.red,C=colors.black,S=colors.black}
+local function connect()
+    send({type="hello"})
+end
+
+-- ── Drawing ───────────────────────────────────────────────────
+local SUIT_COL = {H=colors.red,D=colors.red,C=colors.gray,S=colors.gray}
 
 local function cls(bg)
-    mon.setBackgroundColor(bg or colors.black)
-    mon.clear()
+    mon.setBackgroundColor(bg or colors.black); mon.clear()
 end
 
 local function mprint(x,y,txt,fg,bg)
     if bg then mon.setBackgroundColor(bg) end
     if fg then mon.setTextColor(fg) end
-    mon.setCursorPos(x,y)
-    mon.write(txt)
+    mon.setCursorPos(x,y); mon.write(txt)
 end
 
-local function hfill(y,bg,fg,txt)
+local function mfill(x1,y1,x2,y2,bg,char)
     mon.setBackgroundColor(bg)
-    mon.setCursorPos(1,y)
-    mon.write(string.rep(" ",W))
-    if txt then
-        mon.setTextColor(fg or colors.white)
-        mon.setCursorPos(math.floor((W-#txt)/2)+1,y)
-        mon.write(txt)
-    end
+    local row=string.rep(char or " ",x2-x1+1)
+    for y=y1,y2 do mon.setCursorPos(x1,y); mon.write(row) end
 end
 
--- Draw a card: 7 wide × 5 tall (bigger, since player monitor has space)
-local function draw_card(x,y,card,face_up)
+local function mcentre(x1,x2,y,txt,fg,bg)
+    if bg then mon.setBackgroundColor(bg) end
+    if fg then mon.setTextColor(fg) end
+    local x=x1+math.floor((x2-x1+1-#txt)/2)
+    mon.setCursorPos(x,y); mon.write(txt)
+end
+
+-- Draw a hole card: 9 wide x 5 tall
+-- Uses ASCII only: +-------+  |R      |  |   S   |  |      R|  +-------+
+local function draw_hole_card(x,y,card)
     if not card then
-        -- empty slot
-        for dy=0,4 do
-            mon.setBackgroundColor(colors.gray)
-            mon.setTextColor(colors.lightGray)
-            mon.setCursorPos(x,y+dy)
-            if dy==0 then mon.write("\xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90")
-            elseif dy==4 then mon.write("\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98")
-            else mon.write("\xe2\x94\x82     \xe2\x94\x82") end
-        end
+        mfill(x,y,x+8,y+4,colors.gray)
+        mon.setTextColor(colors.lightGray)
+        mon.setCursorPos(x,y);   mon.write("+-empty-+")
+        mon.setCursorPos(x,y+2); mon.write("|       |")
+        mon.setCursorPos(x,y+4); mon.write("+-empty-+")
         return
     end
-    if not face_up then
-        for dy=0,4 do
-            mon.setBackgroundColor(colors.blue)
-            mon.setTextColor(colors.cyan)
-            mon.setCursorPos(x,y+dy)
-            if dy==0 then mon.write("\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x97")
-            elseif dy==4 then mon.write("\xe2\x95\x9a\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d")
-            else mon.write("\xe2\x95\x91\xe2\x96\x93\xe2\x96\x93\xe2\x96\x93\xe2\x96\x93\xe2\x96\x93\xe2\x95\x91") end
-        end
-        return
-    end
-    local sc = SUIT_COL[card.s] or colors.black
-    local sym = SUIT_SYM[card.s] or "?"
-    local r   = card.r or "?"
-    local mid = r..sym   -- e.g. "A♥" or "10♦"
-    -- pad to 5 chars
-    while #mid < 5 do mid = mid.." " end
+    local sc = SUIT_COL[card.s] or colors.gray
+    local r  = card.r  -- 1-2 chars
+    local s  = card.s  -- 1 char: H D C S
+    -- inner width = 7
+    -- top rank: left-aligned, pad to 7
+    local top = r..string.rep(" ",7-#r)
+    -- suit line: centred in 7 chars
+    local mid = string.rep(" ",3)..s..string.rep(" ",3)
+    -- bot rank: right-aligned
+    local bot = string.rep(" ",7-#r)..r
 
     mon.setBackgroundColor(colors.white); mon.setTextColor(sc)
-    mon.setCursorPos(x,y);   mon.write("\xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x97")
-    mon.setCursorPos(x,y+1); mon.write("\xe2\x95\x91"..r.."   \xe2\x95\x91")
-    mon.setCursorPos(x,y+2); mon.write("\xe2\x95\x91  "..sym.."  \xe2\x95\x91")
-    mon.setCursorPos(x,y+3); mon.write("\xe2\x95\x91   "..r.."\xe2\x95\x91")
-    mon.setCursorPos(x,y+4); mon.write("\xe2\x95\x9a\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d")
+    mon.setCursorPos(x,y);   mon.write("+-"..r..string.rep("-",6-#r).."-+")
+    mon.setCursorPos(x,y+1); mon.write("|"..top.."|")
+    mon.setCursorPos(x,y+2); mon.write("|"..mid.."|")
+    mon.setCursorPos(x,y+3); mon.write("|"..bot.."|")
+    mon.setCursorPos(x,y+4); mon.write("+-"..string.rep("-",7-#r)..r.."-+")
 end
 
--- ── Button layout ─────────────────────────────────────────────────────────────
--- Buttons occupy the bottom row(s)
--- Divide bottom row into sections based on valid_actions
+-- Draw card back (same size)
+local function draw_card_back(x,y)
+    mon.setBackgroundColor(colors.blue); mon.setTextColor(colors.cyan)
+    mon.setCursorPos(x,y);   mon.write("+-//////-+")
+    mon.setCursorPos(x,y+1); mon.write("|///////|")
+    mon.setCursorPos(x,y+2); mon.write("|/ ??? /|")
+    mon.setCursorPos(x,y+3); mon.write("|///////|")
+    mon.setCursorPos(x,y+4); mon.write("+-//////-+")
+end
 
-local BTN_Y = H   -- buttons on last line
-local btn_regions = {}  -- {x1,x2,action} populated in render
+-- Numeric keypad for raise input
+-- Lays out 12 keys across the full width in 2 rows
+-- Returns a table of {x1,x2,y,val} for touch detection
+local keypad_btns = {}
 
-local function render_buttons()
-    btn_regions = {}
-    hfill(BTN_Y, colors.black)
-
-    local actions = state.valid_actions
-    if #actions == 0 then return end
-
-    local section = math.floor(W / #actions)
-    for i, act in ipairs(actions) do
-        local x1 = (i-1)*section + 1
-        local x2 = i==# actions and W or i*section
-        local bg, fg
-        if act=="fold"  then bg=colors.red;    fg=colors.white
-        elseif act=="check" then bg=colors.gray;   fg=colors.white
-        elseif act=="call"  then bg=colors.green;  fg=colors.black
-        elseif act=="raise" then bg=colors.orange; fg=colors.black
-        else bg=colors.gray; fg=colors.white end
-
-        mon.setBackgroundColor(bg)
-        mon.setCursorPos(x1,BTN_Y)
-        mon.write(string.rep(" ",x2-x1+1))
-        local lbl
-        if act=="call" then
-            lbl="CALL "..state.call_amount
-        elseif act=="raise" then
-            lbl=entering_raise and "RAISE: "..raise_input or "RAISE"
-        else
-            lbl=act:upper()
-        end
-        mon.setTextColor(fg)
-        mon.setCursorPos(math.floor((x1+x2-#lbl)/2)+1, BTN_Y)
-        mon.write(lbl)
-        btn_regions[#btn_regions+1]={x1=x1,x2=x2,action=act}
+local function draw_keypad(y1)
+    keypad_btns = {}
+    local keys_row1 = {"1","2","3","4","5","6","7","8","9","0"}
+    local keys_row2 = {"DEL","OK"}
+    -- Row 1: digits 0-9, each ~W/10 wide
+    local kw = math.floor(W / #keys_row1)
+    for i,k in ipairs(keys_row1) do
+        local x1=(i-1)*kw+1; local x2=(i==#keys_row1) and W or i*kw
+        local bg = colors.gray; local fg = colors.white
+        mfill(x1,y1,x2,y1,bg)
+        mcentre(x1,x2,y1,k,fg,bg)
+        keypad_btns[#keypad_btns+1]={x1=x1,x2=x2,y=y1,val=k}
     end
+    -- Row 2: DEL and OK
+    local hw=math.floor(W/2)
+    mfill(1,y1+1,hw,y1+1,colors.red); mcentre(1,hw,y1+1,"DEL",colors.white,colors.red)
+    mfill(hw+1,y1+1,W,y1+1,colors.lime); mcentre(hw+1,W,y1+1,"OK",colors.black,colors.lime)
+    keypad_btns[#keypad_btns+1]={x1=1,x2=hw,y=y1+1,val="DEL"}
+    keypad_btns[#keypad_btns+1]={x1=hw+1,x2=W,y=y1+1,val="OK"}
 end
 
--- ── Main render ───────────────────────────────────────────────────────────────
+-- ── Main render ───────────────────────────────────────────────
 local PHASE_LABEL={waiting="Waiting",preflop="Pre-Flop",flop="Flop",
                    turn="Turn",river="River",showdown="Showdown"}
 
+-- Layout constants (computed relative to H)
+local CARD_Y  = 2                  -- hole cards start row
+local CARD_H  = 5                  -- card height
+local INFO_Y  = CARD_Y + CARD_H + 1
+local BTN_Y   = H                  -- action row
+
 local function render()
     cls(colors.black)
+    keypad_btns = {}
 
-    -- Header: player id, chips, phase
-    hfill(1, colors.black)
-    local phase_str = PHASE_LABEL[state.phase] or state.phase
-    local header = "P"..pid.."  Chips:"..state.chips.."  "..phase_str.."  POT:"..state.pot
-    mprint(2,1,header,colors.yellow,colors.black)
+    -- Header
+    mfill(1,1,W,1,colors.black)
+    local ph = PHASE_LABEL[S.phase] or S.phase
+    local hdr = "P"..pid.."  chips:"..S.chips.."  "..ph.."  pot:"..S.pot
+    mprint(2,1,hdr,colors.yellow,colors.black)
 
-    -- Hole cards — two large cards centered in the top portion
-    local card_w = 7
-    local gap = 2
-    local total_cards_w = 2*card_w + gap
-    local cx = math.floor((W - total_cards_w)/2) + 1
-    local card_y = 3  -- leave row 2 for status
-    draw_card(cx,        card_y, state.hand[1], true)
-    draw_card(cx+card_w+gap, card_y, state.hand[2], true)
+    -- Hole cards (centred, side by side, 9w each + gap)
+    local cw=9; local gap=3
+    local total=2*cw+gap
+    local cx=math.floor((W-total)/2)+1
 
-    -- Status line (row 2)
-    hfill(2, colors.gray)
-    if state.turn == pid and state.phase ~= "waiting" and state.phase ~= "showdown" then
-        local act_str = "YOUR TURN — bet:"..state.current_bet.." call:"..state.call_amount
-        mprint(2,2,act_str, colors.black, colors.lime)
+    if S.raise_mode then
+        -- When entering a raise, show cards smaller and make room for keypad
+        -- Just show card labels instead of full art to save space
+        local c1=S.hand[1]; local c2=S.hand[2]
+        local l1=c1 and (c1.r..c1.s) or "?"
+        local l2=c2 and (c2.r..c2.s) or "?"
+        mfill(1,CARD_Y,W,CARD_Y+CARD_H,colors.black)
+        mcentre(1,HW or math.floor(W/2),CARD_Y+2,l1,
+            c1 and (SUIT_COL[c1.s] or colors.white) or colors.gray, colors.black)
+        mcentre((HW or math.floor(W/2))+1,W,CARD_Y+2,l2,
+            c2 and (SUIT_COL[c2.s] or colors.white) or colors.gray, colors.black)
     else
-        local active_str = ""
-        for i=1,4 do
-            if state.active[i] then
-                active_str = active_str.."P"..i.."("..( state.bets[i] or 0)..")  "
-            end
-        end
-        mprint(2,2,active_str,colors.white,colors.gray)
+        draw_hole_card(cx,       CARD_Y, S.hand[1])
+        draw_hole_card(cx+cw+gap,CARD_Y, S.hand[2])
     end
 
-    -- Result lines at showdown
-    if state.phase=="showdown" and #state.result_lines>0 then
-        for i,line in ipairs(state.result_lines) do
-            local y = card_y + 5 + i
-            if y < BTN_Y then
-                hfill(y, colors.black)
-                mprint(2,y,line,colors.yellow,colors.black)
+    -- Info / status line
+    mfill(1,INFO_Y,W,INFO_Y,colors.gray)
+    if S.turn==pid and S.phase~="waiting" and S.phase~="showdown" then
+        local it="YOUR TURN  current bet:"..S.current_bet.."  call:"..S.call_amount
+        mcentre(1,W,INFO_Y,it,colors.black,colors.lime)
+    elseif S.phase=="showdown" then
+        if #S.result_lines>0 then
+            mcentre(1,W,INFO_Y,S.result_lines[1] or "",colors.yellow,colors.gray)
+        end
+    else
+        local bets_str=""
+        for i=1,4 do
+            if S.active and S.active[i] then
+                bets_str=bets_str.."P"..i..":"..((S.bets and S.bets[i]) or 0).."  "
             end
         end
-        -- Show other players' revealed hands
-        local ry = card_y + 5 + #state.result_lines + 1
-        for other, hand in pairs(state.all_hands) do
-            if other ~= tostring(pid) and ry < BTN_Y then
-                hfill(ry, colors.black)
-                local c1 = hand[1] and hand[1].r..(SUIT_SYM[hand[1].s] or "?") or "?"
-                local c2 = hand[2] and hand[2].r..(SUIT_SYM[hand[2].s] or "?") or "?"
-                mprint(2,ry,"P"..other..": "..c1.." "..c2, colors.lightGray, colors.black)
+        mprint(2,INFO_Y,bets_str,colors.white,colors.gray)
+    end
+
+    -- Raise mode: show keypad + current input
+    if S.raise_mode then
+        local inp_y=INFO_Y+1
+        mfill(1,inp_y,W,inp_y,colors.black)
+        local amt_str="Raise to: "..(S.raise_digits=="" and "___" or S.raise_digits)
+                      .."  (min "..S.raise_min..")"
+        mcentre(1,W,inp_y,amt_str,colors.orange,colors.black)
+        draw_keypad(inp_y+1)
+        return  -- skip normal action buttons
+    end
+
+    -- Showdown: show other hands
+    if S.phase=="showdown" then
+        local ry=INFO_Y+1
+        for other,hand in pairs(S.all_hands) do
+            if other~=tostring(pid) and ry<BTN_Y then
+                local c1=hand[1]; local c2=hand[2]
+                local l1=c1 and (c1.r..c1.s) or "?"
+                local l2=c2 and (c2.r..c2.s) or "?"
+                mprint(2,ry,"P"..other..": "..l1.." "..l2,colors.lightGray,colors.black)
                 ry=ry+1
             end
         end
     end
 
-    render_buttons()
-end
-
--- ── Modem messaging ───────────────────────────────────────────────────────────
-local function send_action(action, raise_to)
-    modem.transmit(DEALER_CH, BCAST_CH,
-        textutils.serialize({type="action",player=pid,action=action,raise_to=raise_to}))
-end
-
-local function connect()
-    modem.transmit(DEALER_CH, BCAST_CH,
-        textutils.serialize({type="hello",player=pid}))
-end
-
--- ── Touch handling ────────────────────────────────────────────────────────────
-local function handle_touch(x,y)
-    if y ~= BTN_Y then return end
-    for _,btn in ipairs(btn_regions) do
-        if x>=btn.x1 and x<=btn.x2 then
-            if btn.action=="raise" then
-                if entering_raise then
-                    local amt = tonumber(raise_input)
-                    if amt then
-                        entering_raise=false; raise_input=""
-                        send_action("raise", amt)
-                    end
-                else
-                    entering_raise=true; raise_input=""
-                    render()
-                end
-            else
-                entering_raise=false; raise_input=""
-                if btn.action=="call" then
-                    send_action("call", state.call_amount)
-                else
-                    send_action(btn.action)
-                end
-            end
-            return
+    -- Action buttons (bottom row)
+    mfill(1,BTN_Y,W,BTN_Y,colors.black)
+    local acts=S.valid_actions
+    if #acts>0 and S.turn==pid then
+        local n=#acts; local bw=math.floor(W/n)
+        for i,act in ipairs(acts) do
+            local bx1=(i-1)*bw+1; local bx2=(i==n) and W or i*bw
+            local bg,fg
+            if act=="fold" then bg=colors.red; fg=colors.white
+            elseif act=="check" then bg=colors.gray; fg=colors.white
+            elseif act=="call" then bg=colors.green; fg=colors.black
+            elseif act=="raise" then bg=colors.orange; fg=colors.black
+            else bg=colors.gray; fg=colors.white end
+            mfill(bx1,BTN_Y,bx2,BTN_Y,bg)
+            local lbl=act:upper()
+            if act=="call" then lbl="CALL "..S.call_amount end
+            mcentre(bx1,bx2,BTN_Y,lbl,fg,bg)
         end
     end
 end
 
--- ── Message handler ───────────────────────────────────────────────────────────
+-- ── Touch ─────────────────────────────────────────────────────
+local HW_local = nil  -- set after W known
+
+local function handle_touch(x,y)
+    -- Raise keypad
+    if S.raise_mode then
+        for _,btn in ipairs(keypad_btns) do
+            if y==btn.y and x>=btn.x1 and x<=btn.x2 then
+                if btn.val=="DEL" then
+                    S.raise_digits=S.raise_digits:sub(1,-2)
+                elseif btn.val=="OK" then
+                    local amt=tonumber(S.raise_digits)
+                    if amt and amt>=S.raise_min then
+                        S.raise_mode=false; S.raise_digits=""
+                        send({type="action",action="raise",raise_to=amt})
+                        S.valid_actions={}
+                    else
+                        -- flash invalid
+                        S.raise_digits=""
+                    end
+                else
+                    if #S.raise_digits<6 then
+                        S.raise_digits=S.raise_digits..btn.val
+                    end
+                end
+                render(); return
+            end
+        end
+        return
+    end
+
+    -- Normal action buttons on bottom row
+    if y==BTN_Y and S.turn==pid and #S.valid_actions>0 then
+        local acts=S.valid_actions; local n=#acts
+        local bw=math.floor(W/n)
+        local idx=math.floor((x-1)/bw)+1
+        if idx<1 then idx=1 end; if idx>n then idx=n end
+        local action=acts[idx]
+        if action=="raise" then
+            -- Raise handled: dealer sends enter_raise prompt, but
+            -- player can also initiate here by switching to raise mode
+            S.raise_mode=true; S.raise_digits=""
+            render()
+        else
+            S.valid_actions={}
+            local ca=math.min(S.call_amount, S.chips)
+            send({type="action",action=action,raise_to=nil})
+            render()
+        end
+    end
+end
+
+-- ── Message handler ───────────────────────────────────────────
 local function handle_msg(msg)
     if not msg then return end
-
-    -- filter: only process messages for this player or broadcast (target=0)
-    local tgt = msg.target
-    if tgt ~= nil and tgt ~= 0 and tgt ~= pid then return end
+    local t=msg.target
+    if t~=nil and t~=0 and t~=pid then return end
 
     if msg.type=="dealer_ready" then
         connect()
-
     elseif msg.type=="ack" then
-        state.chips = msg.chips or state.chips
-        state.phase = msg.phase or state.phase
+        S.chips=msg.chips or S.chips; S.phase=msg.phase or S.phase
         render()
-
     elseif msg.type=="deal" then
-        state.hand = msg.hand or {}
-        state.phase = "preflop"
-        state.result_lines = {}
-        state.all_hands = {}
-        entering_raise = false; raise_input = ""
+        S.hand=msg.hand or {}; S.phase="preflop"
+        S.result_lines={}; S.all_hands={}
+        S.raise_mode=false; S.raise_digits=""
+        S.valid_actions={}
         render()
-
+        -- brief animation: flip from back to face
+        local cw=9; local gap=3; local total=2*cw+gap
+        local cx=math.floor((W-total)/2)+1
+        draw_card_back(cx,CARD_Y); draw_card_back(cx+cw+gap,CARD_Y)
+        sleep(0.2)
+        render()
     elseif msg.type=="state" then
-        state.phase   = msg.phase   or state.phase
-        state.pot     = msg.pot     or state.pot
-        state.bets    = msg.bets    or state.bets
-        state.chips   = (msg.chips and msg.chips[pid]) or state.chips
-        state.active  = msg.active  or state.active
-        state.turn    = msg.turn    or state.turn
+        S.phase  =msg.phase  or S.phase
+        S.pot    =msg.pot    or S.pot
+        S.bets   =msg.bets   or S.bets
+        S.chips  =(msg.chips and msg.chips[pid]) or S.chips
+        S.active =msg.active or S.active
+        S.turn   =msg.turn   or S.turn
+        if S.turn~=pid then S.valid_actions={}; S.raise_mode=false end
         render()
-
     elseif msg.type=="community" then
-        state.community = msg.cards or {}
-        render()
-
+        S.community=msg.cards or {}; render()
     elseif msg.type=="your_turn" then
-        state.valid_actions = msg.valid_actions or {}
-        state.call_amount   = msg.call_amount   or 0
-        state.pot           = msg.pot           or state.pot
-        state.current_bet   = msg.current_bet   or 0
-        state.turn          = pid
+        S.valid_actions=msg.valid_actions or {}
+        S.call_amount  =msg.call_amount   or 0
+        S.pot          =msg.pot           or S.pot
+        S.current_bet  =msg.current_bet   or 0
+        S.turn=pid
         render()
-
+    elseif msg.type=="enter_raise" then
+        S.raise_mode=true; S.raise_digits=""
+        S.raise_min =msg.min_raise or (S.current_bet+10)
+        render()
     elseif msg.type=="reveal" then
-        -- Another player's hand revealed at showdown
         if msg.player then
-            state.all_hands[tostring(msg.player)] = msg.hand
+            S.all_hands[tostring(msg.player)]=msg.hand
         end
         render()
-
     elseif msg.type=="result" then
-        state.phase        = "showdown"
-        state.valid_actions= {}
-        state.result_lines = msg.result_lines or {}
-        if msg.community then state.community = msg.community end
+        S.phase       ="showdown"
+        S.valid_actions={}
+        S.result_lines=msg.result_lines or {}
+        S.raise_mode  =false
+        if msg.community then S.community=msg.community end
         render()
     end
 end
 
--- ── Key input for raise amount (fallback: keyboard) ───────────────────────────
-local function handle_key(key)
-    if not entering_raise then return end
-    if key>=keys.zero and key<=keys.nine then
-        raise_input = raise_input .. tostring(key - keys.zero)
-        render()
-    elseif key==keys.enter or key==keys.numPadEnter then
-        local amt=tonumber(raise_input)
-        if amt then
-            entering_raise=false; raise_input=""
-            send_action("raise", amt)
-        end
-    elseif key==keys.backspace then
-        raise_input = raise_input:sub(1,-2)
-        render()
-    end
-end
-
--- ── Boot ──────────────────────────────────────────────────────────────────────
+-- ── Boot ──────────────────────────────────────────────────────
+HW_local = math.floor(W/2)
 cls(colors.black)
-mprint(1,1,"P"..pid.." — Connecting...",colors.yellow,colors.black)
+mcentre(1,W,math.floor(H/2),"P"..pid.." connecting...",colors.yellow,colors.black)
 connect()
 
--- ── Event loop ────────────────────────────────────────────────────────────────
 while true do
     local ev={os.pullEvent()}
-    local etype=ev[1]
-
-    if etype=="modem_message" then
+    if ev[1]=="modem_message" then
         handle_msg(textutils.unserialize(ev[5] or ""))
-
-    elseif etype=="monitor_touch" then
+    elseif ev[1]=="monitor_touch" then
         handle_touch(ev[3],ev[4])
-
-    elseif etype=="key" then
-        handle_key(ev[2])
     end
 end
