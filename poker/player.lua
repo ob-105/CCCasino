@@ -11,6 +11,29 @@ assert(pid and pid>=1 and pid<=4, "Usage: player <1-4>")
 local BCAST_CH  = 11
 local DEALER_CH = 10
 
+-- ── wallet ────────────────────────────────────────────────────────────────────
+local wlib        = dofile("/casino/lib/wallet.lua")
+local wallet_drv  = wlib.find_drive()   -- disk drive peripheral name, or nil
+local wallet_data = nil                 -- loaded wallet table, or nil
+local wallet_err  = nil                 -- last load error, or nil
+
+local function reload_wallet()
+    wallet_data = nil; wallet_err = nil
+    if wallet_drv then
+        wallet_data, wallet_err = wlib.load(wallet_drv)
+    end
+end
+
+local function save_wallet(new_balance)
+    if not wallet_data or not wallet_drv then return false end
+    wallet_data.balance = new_balance
+    local ok, err = wlib.save(wallet_data, wallet_drv)
+    if not ok then wallet_err = err end
+    return ok
+end
+
+reload_wallet()
+
 -- ── Peripherals ───────────────────────────────────────────────
 local function try_wrap(side)
     if peripheral.getType(side)=="monitor" then
@@ -48,19 +71,27 @@ assert(modem, "No modem found")
 modem.open(BCAST_CH)
 
 -- ── State ─────────────────────────────────────────────────────
+local START_CHIPS = wallet_data and wallet_data.balance or 500
+
 local S = {
     hand={}, community={}, phase="waiting",
-    chips=START_CHIPS or 500, pot=0,
+    chips=START_CHIPS, pot=0,
     bets={}, active={}, chips_all={},
     turn=0, call_amount=0, current_bet=0,
     valid_actions={}, result_lines={}, all_hands={},
     raise_mode=false, raise_digits="", raise_min=0,
 }
-local START_CHIPS = 500
 
 -- ── Modem ─────────────────────────────────────────────────────
 local function send(msg) msg.player=pid; modem.transmit(DEALER_CH,BCAST_CH,textutils.serialize(msg)) end
-local function connect() send({type="hello"}) end
+local function connect()
+    local m = {type="hello"}
+    if wallet_data then
+        m.disk_balance = wallet_data.balance
+        m.player_name  = wallet_data.player_name
+    end
+    send(m)
+end
 
 -- ── Drawing helpers ───────────────────────────────────────────
 local SUIT_COL={H=colors.red,D=colors.red,C=colors.gray,S=colors.gray}
@@ -196,9 +227,23 @@ local function render_corner()
     local hdr_bg = is_turn and colors.lime or colors.black
     local hdr_fg = is_turn and colors.black or colors.yellow
     mfill(corner_mon,1,1,CW,1,hdr_bg)
-    local hdr="P"..pid.."  "..S.chips.."c  "..(ph_label[S.phase] or S.phase)
+    -- Show player name from disk if available, else P<n>
+    local display_name = (wallet_data and wallet_data.player_name) or ("P"..pid)
+    local hdr = display_name.."  "..S.chips.."c  "..(ph_label[S.phase] or S.phase)
     mwrite(corner_mon,2,1,hdr,hdr_fg,hdr_bg)
     mwrite(corner_mon,CW-5,1,"POT:"..S.pot,hdr_fg,hdr_bg)
+
+    -- Disk status line (row 2 when not your turn)
+    if not is_turn then
+        mfill(corner_mon,1,2,CW,2,colors.black)
+        if wallet_data then
+            mwrite(corner_mon,2,2,"[disk] "..wallet_data.balance.."c saved",colors.green,colors.black)
+        elseif wallet_drv then
+            mwrite(corner_mon,2,2,"[disk] "..(wallet_err or "no wallet"),colors.orange,colors.black)
+        else
+            mwrite(corner_mon,2,2,"[no disk drive]",colors.gray,colors.black)
+        end
+    end
 
     -- Info rows
     local y=2
@@ -304,6 +349,11 @@ local function render_corner()
             if act=="call" then lbl="CALL "..S.call_amount end
             mcentre(corner_mon,bx1,bx2,CH,lbl,fg,bg)
         end
+    elseif S.phase=="waiting" or S.phase=="showdown" then
+        -- Show "LEAVE TABLE" button when no action is needed
+        -- Pressing it writes the current balance to disk and exits.
+        mfill(corner_mon,1,CH,CW,CH,colors.purple)
+        mcentre(corner_mon,1,CW,CH,"LEAVE TABLE",colors.white,colors.purple)
     end
 end
 
@@ -346,6 +396,16 @@ local function handle_corner_touch(x,y)
             send({type="action",action=action})
             render_corner()
         end
+    elseif y==CH and (S.phase=="waiting" or S.phase=="showdown") then
+        -- LEAVE TABLE button
+        local saved = save_wallet(S.chips)
+        -- Flash confirmation on screen then exit
+        mfill(corner_mon,1,CH,CW,CH,saved and colors.lime or colors.orange)
+        local lbl = saved and ("Saved "..S.chips.."c to disk. Goodbye!")
+                           or "No disk — chips not saved!"
+        mcentre(corner_mon,1,CW,CH,lbl,colors.black,saved and colors.lime or colors.orange)
+        sleep(2)
+        error("Player left table")   -- terminates the program cleanly
     end
 end
 
@@ -399,7 +459,10 @@ local function handle_msg(msg)
         S.phase="showdown"; S.valid_actions={}; S.raise_mode=false
         S.result_lines=msg.result_lines or {}
         S._hand_name=msg.hand_name
-        if msg.community then S.community=msg.community end
+        if msg.community   then S.community=msg.community end
+        if msg.final_chips then S.chips=msg.final_chips   end
+        -- Write updated balance to disk after every hand
+        save_wallet(S.chips)
         render_corner(); render_foot()
     end
 end
@@ -425,5 +488,18 @@ while true do
             handle_corner_touch(ev[3],ev[4])
         end
         -- foot monitor is display-only; no touch handling needed
+    elseif ev[1]=="disk" then
+        -- Disk inserted — try to load wallet (only before a hand starts)
+        if S.phase=="waiting" then
+            reload_wallet()
+            if wallet_data then
+                S.chips = wallet_data.balance
+                connect()   -- re-announce with disk balance
+            end
+            render_corner()
+        end
+    elseif ev[1]=="disk_eject" then
+        wallet_data = nil; wallet_err = "disk removed"
+        render_corner()
     end
 end

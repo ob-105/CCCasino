@@ -5,7 +5,7 @@
 -- Run: dealer [num_players]   default 4
 
 local NUM_PLAYERS = tonumber(arg and arg[1]) or 4
-local START_CHIPS = 500
+local START_CHIPS = 500   -- fallback for players without a wallet disk
 local SMALL_BLIND = 5
 local BIG_BLIND   = 10
 local DEALER_CH   = 10
@@ -101,10 +101,12 @@ local G = {
     active={}, turn=0, current_bet=0,
     acted={}, result_lines={},
 }
-local connected = {}
+local connected     = {}
+local player_names  = {}   -- player_names[i] = display name from disk (or "P<i>")
 for i=1,NUM_PLAYERS do
     G.chips[i]=START_CHIPS; G.bets[i]=0
     G.active[i]=false; G.acted[i]=false; G.hands[i]={}
+    player_names[i] = "P"..i
 end
 
 -- ── Modem ─────────────────────────────────────────────────────
@@ -193,7 +195,7 @@ local function render()
         end
         local d=G.dealer_btn==i and "(D) " or "    "
         mfill(1,row,W,row,bg)
-        mprint(2,row,"P"..i..d..status,fg,bg)
+        mprint(2,row,(player_names[i] or "P"..i)..d..status,fg,bg)
         row=row+1
     end
 
@@ -363,7 +365,8 @@ local function do_showdown()
         send_p(i,{type="result",won=won,winners=winners,
                   result_lines=G.result_lines,
                   hand_name=scores[i] and hand_name(scores[i]) or nil,
-                  community=G.community})
+                  community=G.community,
+                  final_chips=G.chips[i]})
     end
     anim_win(winners); render()
 end
@@ -377,6 +380,14 @@ advance_phase = function()
             G.result_lines={"P"..winner.." wins "..G.pot.." (all folded)"}
         end
         G.phase="showdown"; bcast_state()
+        -- notify all connected players of their final chip count for disk write
+        for i=1,NUM_PLAYERS do
+            if connected[i] then
+                local won=(i==winner)
+                send_p(i,{type="result",won=won,winners=winner and {winner} or {},
+                          result_lines=G.result_lines,final_chips=G.chips[i]})
+            end
+        end
         if winner then anim_win({winner}) end
         render(); return
     end
@@ -452,9 +463,17 @@ while true do
         local msg=textutils.unserialize(ev[5] or "")
         if msg then
             if msg.type=="hello" and msg.player then
-                connected[msg.player]=true
-                send_p(msg.player,{type="ack",player=msg.player,
-                                   chips=G.chips[msg.player],phase=G.phase})
+                local p = msg.player
+                -- Only load disk balance on first connect; preserve in-game chips on reconnect
+                if not connected[p] and msg.disk_balance and msg.disk_balance > 0 then
+                    G.chips[p] = msg.disk_balance
+                end
+                if msg.player_name and msg.player_name ~= "" then
+                    player_names[p] = msg.player_name
+                end
+                connected[p] = true
+                send_p(p,{type="ack",player=p,
+                          chips=G.chips[p],phase=G.phase})
                 render()
             elseif msg.type=="action" and msg.player then
                 do_action(msg.player,msg.action,msg.raise_to)
