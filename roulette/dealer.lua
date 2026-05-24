@@ -1,25 +1,20 @@
 -- roulette/dealer.lua
--- Roulette croupier / wheel computer.
--- Hardware: monitor (any size, 2+ wide recommended), wireless modem
+-- Fully automatic roulette wheel — no operator interaction needed.
+-- Spins automatically when 2+ players are ready (30s countdown),
+-- or immediately when ALL connected players are ready.
+-- Hardware: monitor (2+ wide recommended), wireless modem
 -- Channels: listens on 20 (DEALER_CH), broadcasts on 21 (BCAST_CH)
--- Run: dealer [max_players]   default 6
---
--- Operator workflow:
---   1. Press OPEN BETTING  -- players can now place bets
---   2. Wait for all players to press READY on their terminals
---      (or press FORCE SPIN at any time to spin immediately)
---   3. Wheel spins automatically once everyone is ready
---   4. Results shown for 6 seconds, then back to waiting
 
 local MAX_PLAYERS = tonumber(arg and arg[1]) or 6
 local DEALER_CH   = 20
 local BCAST_CH    = 21
+local SPIN_DELAY  = 30
 
 math.randomseed(os.epoch("utc"))
 
 local mon = peripheral.find("monitor")
 assert(mon, "Attach a monitor to the roulette dealer computer")
-mon.setTextScale(0.5)
+mon.setTextScale(1.0)
 local W, H = mon.getSize()
 
 local modem = peripheral.find("modem")
@@ -32,8 +27,8 @@ local RED_SET = {}
 for _, n in ipairs({1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}) do RED_SET[n]=true end
 
 local function num_bg(n)
-    if n == 0       then return colors.green end
-    if RED_SET[n]   then return colors.red   end
+    if n == 0     then return colors.green end
+    if RED_SET[n] then return colors.red   end
     return colors.gray
 end
 local function wheel_pos(n)
@@ -42,18 +37,25 @@ local function wheel_pos(n)
 end
 
 -- ── state ─────────────────────────────────────────────────────────────────────
--- phase: "waiting" | "betting" | "spinning" | "result"
-local phase   = "waiting"
-local players = {}   -- [pid] = {name, ready, connected}
-local history = {}   -- last 10 results
-local last_num = nil
+local phase     = "betting"
+local players   = {}
+local history   = {}
+local last_num  = nil
+local countdown = 0
+local spin_tmr  = nil
+local tick_tmr  = nil
 
-local function bcast(msg)   modem.transmit(BCAST_CH, DEALER_CH, textutils.serialize(msg)) end
+local function bcast(msg)       modem.transmit(BCAST_CH, DEALER_CH, textutils.serialize(msg)) end
 local function send_p(pid, msg) msg.target = pid; bcast(msg) end
 
 local function count_connected()
     local n = 0
-    for _, p in pairs(players) do if p.connected then n = n+1 end end
+    for _, p in pairs(players) do if p.connected then n=n+1 end end
+    return n
+end
+local function count_ready()
+    local n = 0
+    for _, p in pairs(players) do if p.connected and p.ready then n=n+1 end end
     return n
 end
 local function all_ready()
@@ -63,12 +65,21 @@ local function all_ready()
     end
     return true
 end
+local function cancel_countdown()
+    spin_tmr = nil; tick_tmr = nil; countdown = 0
+end
+local function start_countdown()
+    cancel_countdown()
+    countdown = SPIN_DELAY
+    spin_tmr  = os.startTimer(SPIN_DELAY)
+    tick_tmr  = os.startTimer(1)
+end
 
 -- ── drawing ───────────────────────────────────────────────────────────────────
 local function fill(x1,y1,x2,y2,bg)
     mon.setBackgroundColor(bg)
-    local row = string.rep(" ",x2-x1+1)
-    for y=y1,y2 do mon.setCursorPos(x1,y); mon.write(row) end
+    local row = string.rep(" ", x2-x1+1)
+    for y = y1, y2 do mon.setCursorPos(x1,y); mon.write(row) end
 end
 local function mp(x,y,s,fg,bg)
     if bg then mon.setBackgroundColor(bg) end
@@ -78,167 +89,157 @@ end
 local function centre(y,s,fg,bg)
     if bg then mon.setBackgroundColor(bg) end
     if fg then mon.setTextColor(fg) end
-    mon.setCursorPos(math.floor((W-#s)/2)+1, y); mon.write(s)
+    local x = math.max(1, math.floor((W-#s)/2)+1)
+    mon.setCursorPos(x,y); mon.write(s)
 end
 
-local btns = {}
-local function abtn(x1,y1,x2,y2,id,label,bg,fg)
-    fill(x1,y1,x2,y2,bg)
-    mp(x1+math.floor((x2-x1+1-#label)/2), y1+math.floor((y2-y1)/2), label, fg, bg)
-    btns[#btns+1] = {x1=x1,y1=y1,x2=x2,y2=y2,id=id}
-end
-
--- Draw the wheel strip: 7 visible numbers centred on wheel position `center`.
--- `highlight` = the winning number to glow gold (nil = no highlight).
-local STRIP_CELLS = 7
-local CELL_W      = 5   -- " 32  " format
+-- Wheel strip: 5 numbers centred on wheel position `center`.
+local STRIP_CELLS = 5
+local CELL_W      = 4   -- " 32 " format
 
 local function draw_strip(center, highlight)
-    local total_w = STRIP_CELLS * CELL_W + (STRIP_CELLS-1)
-    local sx = math.floor((W - total_w) / 2) + 1
-    local sy = 3
+    local total_w = STRIP_CELLS * CELL_W
+    local sx      = math.floor((W - total_w) / 2) + 1
+    local sy      = 3
     fill(1, sy, W, sy, colors.black)
     for i = 1, STRIP_CELLS do
-        local offset = i - math.ceil(STRIP_CELLS/2)
-        local idx = ((center + offset - 1) % #WHEEL) + 1
-        local n   = WHEEL[idx]
-        local mid = (i == math.ceil(STRIP_CELLS/2))
-        local bg  = mid and colors.yellow or num_bg(n)
-        local fg  = mid and colors.black  or colors.white
-        -- highlight glow when result settled
+        local offset = i - math.ceil(STRIP_CELLS / 2)
+        local idx    = ((center + offset - 1) % #WHEEL) + 1
+        local n      = WHEEL[idx]
+        local mid    = (i == math.ceil(STRIP_CELLS / 2))
+        local bg     = mid and colors.yellow or num_bg(n)
+        local fg     = mid and colors.black  or colors.white
         if highlight == n and mid then bg = colors.lime; fg = colors.black end
-        local lbl = string.format("%2d", n) .. "   "
-        lbl = lbl:sub(1, CELL_W)
-        local cx = sx + (i-1) * (CELL_W+1)
+        local lbl    = string.format(" %2d ", n)
+        local cx     = sx + (i-1) * CELL_W
         fill(cx, sy, cx+CELL_W-1, sy, bg)
         mp(cx, sy, lbl, fg, bg)
-        if i < STRIP_CELLS then
-            mon.setBackgroundColor(colors.black)
-            mon.setTextColor(colors.gray)
-            mon.setCursorPos(cx+CELL_W, sy); mon.write("|")
-        end
     end
-    -- arrows
     mon.setBackgroundColor(colors.black); mon.setTextColor(colors.white)
-    mon.setCursorPos(sx-2, sy); mon.write("\x11\x11")
-    mon.setCursorPos(sx + total_w + 1, sy); mon.write("\x10\x10")
+    local asx = math.max(1, sx-2)
+    mon.setCursorPos(asx, sy); mon.write("\x11\x11")
+    if sx+total_w+1 <= W then
+        mon.setCursorPos(sx+total_w+1, sy); mon.write("\x10\x10")
+    end
 end
 
--- Full screen render (called outside of spin animation).
+-- ── render ────────────────────────────────────────────────────────────────────
 local function render()
     mon.setBackgroundColor(colors.black); mon.clear()
-    btns = {}
 
-    -- ── header ─────────────────────────────────────────────────────────────────
-    fill(1,1,W,1,colors.green)
-    local title = "\x04\x04\x04  ROULETTE  \x04\x04\x04"
-    centre(1, title, colors.black, colors.green)
+    -- Row 1: header
+    fill(1, 1, W, 1, colors.green)
+    centre(1, "\x04\x04\x04  ROULETTE  \x04\x04\x04", colors.black, colors.green)
 
-    -- ── wheel strip ────────────────────────────────────────────────────────────
+    -- Row 2: phase banner
+    local ph_txt = { betting=" BETS OPEN ", spinning=" SPINNING! ", result="  RESULT  " }
+    local ph_col = { betting=colors.lime,   spinning=colors.orange,  result=colors.yellow }
+    fill(1, 2, W, 2, colors.black)
+    centre(2, ph_txt[phase] or "  \x1b  ", colors.black, ph_col[phase] or colors.gray)
+
+    -- Row 3: wheel strip
     if last_num ~= nil then
-        draw_strip(wheel_pos(last_num), last_num)
+        draw_strip(wheel_pos(last_num), phase=="result" and last_num or nil)
     else
-        fill(1,3,W,3,colors.black)
-        centre(3, "  \x1b  Waiting for next round  \x1a  ", colors.gray, colors.black)
+        fill(1, 3, W, 3, colors.black)
+        centre(3, " \x1b  \x1b  \x1b  \x1b  \x1b ", colors.gray, colors.black)
     end
 
-    -- ── phase banner ───────────────────────────────────────────────────────────
-    local ph_text = {
-        waiting  = "  Waiting  ",
-        betting  = " BETS OPEN ",
-        spinning = " SPINNING! ",
-        result   = "  RESULT   ",
-    }
-    local ph_col = {
-        waiting  = colors.gray,
-        betting  = colors.lime,
-        spinning = colors.orange,
-        result   = colors.yellow,
-    }
-    fill(1,4,W,4,colors.black)
-    centre(4, ph_text[phase] or phase, colors.black, ph_col[phase] or colors.white)
-
-    -- ── last result ────────────────────────────────────────────────────────────
-    fill(1,5,W,5,colors.black)
+    -- Rows 4-5: big number / status
+    fill(1, 4, W, 5, colors.black)
     if phase == "result" and last_num ~= nil then
         local rb = last_num==0 and "Green" or (RED_SET[last_num] and "Red" or "Black")
-        centre(5, "  " .. last_num .. "  (" .. rb .. ")  ", colors.white, num_bg(last_num))
-    end
-
-    -- ── history ─────────────────────────────────────────────────────────────────
-    fill(1,6,W,6,colors.black)
-    if #history > 0 then
-        mp(2,6,"Last: ",colors.gray,colors.black)
-        local hx = 9
-        for i = math.max(1,#history-8), #history do
-            local n = history[i]
-            local lbl = string.format("%2d", n) .. " "
-            fill(hx, 6, hx+#lbl-1, 6, num_bg(n))
-            mp(hx, 6, lbl, colors.white, num_bg(n))
-            hx = hx + #lbl + 1
+        local bg = num_bg(last_num)
+        fill(1, 4, W, 5, bg)
+        centre(4, "  " .. last_num .. "  ", colors.white, bg)
+        centre(5, "  " .. rb:upper() .. "  ", colors.white, bg)
+    elseif phase == "spinning" then
+        fill(1, 4, W, 5, colors.orange)
+        centre(4, "  SPINNING  ", colors.black, colors.orange)
+        centre(5, string.rep("\x04", math.min(W-4,14)), colors.black, colors.orange)
+    elseif phase == "betting" then
+        local nr = count_ready()
+        local nc = count_connected()
+        if countdown > 0 then
+            fill(1, 4, W, 4, colors.orange)
+            centre(4, "  Spinning in " .. countdown .. "s  ", colors.black, colors.orange)
+            fill(1, 5, W, 5, colors.black)
+            centre(5, nr .. " / " .. nc .. " players ready", colors.white, colors.black)
+        elseif nc == 0 then
+            centre(4, "Waiting for players...", colors.gray, colors.black)
+        elseif nr == 0 then
+            centre(4, "  Bets open  (" .. nc .. " player" .. (nc~=1 and "s" or "") .. ")  ", colors.lime, colors.black)
+        else
+            centre(4, nr .. " / " .. nc .. " ready", colors.white, colors.black)
+            centre(5, nr < 2 and "Need 2+ to start" or "Countdown paused", colors.gray, colors.black)
         end
     end
 
-    -- ── player list ─────────────────────────────────────────────────────────────
-    local py = 8
-    mp(2, py-1, "Players:", colors.gray, colors.black)
-    local shown = 0
-    for pid = 1, MAX_PLAYERS do
-        local p = players[pid]
-        if p and p.connected then
-            shown = shown + 1
-            local row = py + shown - 1
-            if row <= H-3 then
-                fill(1, row, W, row, colors.black)
-                local dot_col = p.ready and colors.lime or colors.orange
-                local dot     = p.ready and "\x07" or "\x07"
-                mp(2,  row, "P"..pid.." "..p.name, colors.white,  colors.black)
-                mp(W-7, row, p.ready and "READY  " or "betting", dot_col, colors.black)
+    -- Row 6: player dots
+    if H >= 6 then
+        fill(1, 6, W, 6, colors.black)
+        mp(2, 6, "P:", colors.gray, colors.black)
+        local px = 5
+        local any = false
+        for pid_i = 1, MAX_PLAYERS do
+            local p = players[pid_i]
+            if p and p.connected then
+                any = true
+                local col = p.ready and colors.lime or colors.orange
+                local tag = "P"..pid_i.." "
+                if px + #tag > W then break end
+                mp(px, 6, tag, col, colors.black)
+                px = px + #tag + 1
+            end
+        end
+        if not any then
+            mp(5, 6, "(none connected)", colors.gray, colors.black)
+        end
+    end
+
+    -- Row 7: history
+    if H >= 7 then
+        fill(1, 7, W, H, colors.black)
+        if #history > 0 then
+            mp(2, 7, ":", colors.gray, colors.black)
+            local hx = 4
+            for i = #history, math.max(1, #history-7), -1 do
+                local n   = history[i]
+                local lbl = string.format(" %d ", n)
+                if hx + #lbl - 1 <= W then
+                    fill(hx, 7, hx+#lbl-1, 7, num_bg(n))
+                    mp(hx, 7, lbl, colors.white, num_bg(n))
+                    hx = hx + #lbl + 1
+                end
             end
         end
     end
-    if shown == 0 then
-        mp(2, py, "(no players connected)", colors.gray, colors.black)
-    end
-
-    -- ── action buttons ──────────────────────────────────────────────────────────
-    local by = H-1
-    if phase == "waiting" or phase == "result" then
-        abtn(2, by, W-1, by+1, "open", "OPEN BETTING", colors.green, colors.black)
-    elseif phase == "betting" then
-        local hw = math.floor((W-3)/2)
-        abtn(2,    by, 1+hw, by+1, "force", "FORCE SPIN",   colors.red,    colors.white)
-        abtn(3+hw, by, W-1,  by+1, "close", "CLOSE BETS",   colors.orange, colors.black)
-    end
 end
 
--- ── spin animation ────────────────────────────────────────────────────────────
+-- ── spin ──────────────────────────────────────────────────────────────────────
 local function do_spin()
+    cancel_countdown()
     phase = "spinning"
     bcast({type="phase", phase="spinning"})
     render()
 
-    local result     = math.random(0, 36)
-    local t_idx      = wheel_pos(result)
-    local s_idx      = math.random(#WHEEL)
-    local dist       = (t_idx - s_idx) % #WHEEL
-    local total_steps = 2 * #WHEEL + dist   -- ~2 full rotations + land
+    local result      = math.random(0, 36)
+    local t_idx       = wheel_pos(result)
+    local s_idx       = math.random(#WHEEL)
+    local dist        = (t_idx - s_idx) % #WHEEL
+    local total_steps = 2 * #WHEEL + dist
 
     for step = 1, total_steps do
         local pos = ((s_idx + step - 1) % #WHEEL) + 1
         local t   = step / total_steps
         draw_strip(pos, nil)
-        sleep(0.025 + t * t * 0.30)   -- quadratic ease-out: starts fast, ends slow
+        sleep(0.025 + t * t * 0.30)
     end
 
-    -- Hold on final position with glow
-    draw_strip(t_idx, result)
-    sleep(0.5)
-
-    -- Flash the winning cell three times
-    for i = 1, 3 do
-        fill(1,3,W,3,colors.black); sleep(0.15)
-        draw_strip(t_idx, result);  sleep(0.15)
+    draw_strip(t_idx, result); sleep(0.5)
+    for _ = 1, 3 do
+        fill(1, 3, W, 3, colors.black); sleep(0.15)
+        draw_strip(t_idx, result);       sleep(0.15)
     end
 
     last_num = result
@@ -249,10 +250,29 @@ local function do_spin()
     bcast({type="result", number=result})
     render()
     sleep(6)
+end
 
-    phase = "waiting"
+local function open_betting()
+    phase = "betting"
+    cancel_countdown()
     for _, p in pairs(players) do p.ready = false end
+    bcast({type="phase", phase="betting"})
     render()
+end
+
+-- ── check countdown state ─────────────────────────────────────────────────────
+local function check_ready()
+    if phase ~= "betting" then return end
+    local nr = count_ready()
+    if nr >= 2 and all_ready() then
+        do_spin(); open_betting()
+    elseif nr >= 2 and not spin_tmr then
+        start_countdown(); render()
+    elseif nr < 2 and spin_tmr then
+        cancel_countdown(); render()
+    else
+        render()
+    end
 end
 
 -- ── message handler ───────────────────────────────────────────────────────────
@@ -271,51 +291,48 @@ local function handle_msg(msg)
         end
     elseif msg.type == "ready" and msg.player then
         local p = players[msg.player]
-        if p and p.connected then
+        if p and p.connected and phase == "betting" then
             p.ready = true
-            render()
-            if phase == "betting" and all_ready() then
-                do_spin()
-            end
+            check_ready()
         end
     elseif msg.type == "unready" and msg.player then
         local p = players[msg.player]
-        if p and phase == "betting" then p.ready = false; render() end
+        if p and phase == "betting" then
+            p.ready = false
+            check_ready()
+        end
     elseif msg.type == "bye" and msg.player then
         local p = players[msg.player]
-        if p then p.connected = false; render() end
-    end
-end
-
--- ── touch handler ─────────────────────────────────────────────────────────────
-local function handle_touch(x, y)
-    for _, b in ipairs(btns) do
-        if x>=b.x1 and x<=b.x2 and y>=b.y1 and y<=b.y2 then
-            if b.id == "open" then
-                phase = "betting"
-                for _, p in pairs(players) do p.ready = false end
-                bcast({type="phase", phase="betting"})
-                render()
-            elseif b.id == "force" or b.id == "close" then
-                do_spin()
-            end
-            return
+        if p then
+            p.connected = false
+            if phase == "betting" then check_ready() else render() end
         end
     end
 end
 
 -- ── main loop ─────────────────────────────────────────────────────────────────
-render()
 bcast({type="dealer_ready"})
+open_betting()
 
 while true do
     local ev = {os.pullEvent()}
-    if ev[1] == "monitor_touch" then
-        handle_touch(ev[3], ev[4])
-    elseif ev[1] == "modem_message" then
+    if ev[1] == "modem_message" then
         local msg = textutils.unserialize(ev[5] or "")
         if msg and (not msg.target or msg.target == 0) then
             handle_msg(msg)
+        end
+    elseif ev[1] == "timer" then
+        if ev[2] == spin_tmr then
+            spin_tmr = nil; tick_tmr = nil; countdown = 0
+            do_spin()
+            open_betting()
+        elseif ev[2] == tick_tmr then
+            tick_tmr = nil
+            if countdown > 0 then
+                countdown = countdown - 1
+                if countdown > 0 then tick_tmr = os.startTimer(1) end
+            end
+            render()
         end
     end
 end
