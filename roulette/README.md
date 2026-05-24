@@ -1,33 +1,67 @@
-# Roulette
+# Roulette (Multi-Player)
 
-European roulette (single zero, numbers 0–36) with a full touch-screen betting board.
+European roulette (single zero, 0–36) with a central dealer wheel computer and individual player betting terminals. Up to 6 players can bet simultaneously — each on their own screen with their own disk.
+
+## How It Works
+
+1. The **dealer computer** sits at the center of the roulette table. The operator uses it to open betting and trigger spins.
+2. Each **player terminal** is a separate computer at each seat. Players insert their wallet disk, place bets on their touch-screen board, then press **READY**.
+3. The dealer wheel **auto-spins** once all connected players press READY, or the operator presses **FORCE SPIN**.
+4. The winning number is announced. Each player terminal calculates its own payout independently and writes the result back to the player's disk.
 
 ## Hardware
 
+### Dealer Computer (center of table)
+
 | Component | Requirement |
 |-----------|-------------|
-| Monitor | **2 blocks wide** minimum at 0.5 text scale (~51 chars). Taller is better for the result area. |
-| Disk Drive | Any side. |
+| Monitor | Any size, any side. 2+ blocks wide recommended. |
+| Wireless Modem | Required. Listens on channel 20, broadcasts on 21. |
 
-> A single 1×1 monitor is too narrow for the number grid. Place two monitor blocks side by side.
+The dealer monitor shows the animated spinning wheel strip, the result, player ready status, and control buttons.
+
+### Player Terminal (one per seat, up to 6)
+
+| Component | Requirement |
+|-----------|-------------|
+| Monitor | **2 blocks wide minimum** at 0.5 text scale (~51 chars). |
+| Disk Drive | Any side. Player inserts their wallet disk. |
+| Wireless Modem | Required. |
 
 ## Install
 
+**Dealer computer:**
 ```
 wget https://raw.githubusercontent.com/ob-105/CCCasino/main/install.lua install
 install
 ```
+Select **5. Roulette Dealer**, reboot.
 
-Select **5. Roulette Table**, then reboot.
+**Each player terminal:**
+```
+wget https://raw.githubusercontent.com/ob-105/CCCasino/main/install.lua install
+install
+```
+Select **6. Roulette Player**, enter this seat's number (1–6), reboot.
 
-## Playing
+## Dealer Controls
+
+| Button | Effect |
+|--------|--------|
+| **OPEN BETTING** | Starts a new round — players can now place bets |
+| **FORCE SPIN** | Spins immediately, even if not all players are ready |
+| **CLOSE BETS** | Same as FORCE SPIN — locks bets and spins |
+
+## Playing (Player Terminal)
 
 1. Insert wallet disk into the disk drive.
-2. Tap a **chip size** at the top of the screen (1 / 5 / 10 / 25 / 50 / 100).
-3. Tap cells on the betting board to place bets. Each tap adds one chip of the selected size. Tap the same cell multiple times to stack bets. Cells with a bet on them turn **yellow**.
-4. Tap **SPIN** to play. The total bet is deducted from your balance and the result is shown.
-5. Tap **CLEAR** to remove all pending bets without spinning.
-6. Tap **LEAVE TABLE** when done — balance is saved and the program exits.
+2. Wait for the dealer to open betting — the screen shows **"Place your bets!"**
+3. Tap a chip size at the top (1 / 5 / 10 / 25 / 50 / 100).
+4. Tap cells on the betting board to stack bets. Cells with bets turn **orange**.
+5. Tap **READY** — your balance is deducted immediately and bets are locked.
+6. Tap **CANCEL READY** to take your bets back and adjust.
+7. When the wheel stops, the winning number highlights on your board and your payout is shown.
+8. Tap **LEAVE TABLE** at any time — balance is saved to disk.
 
 ## Betting Board Layout
 
@@ -38,10 +72,6 @@ Select **5. Roulette Table**, then reboot.
       [ 1st 12 ][ 2nd 12 ][ 3rd 12 ]
       [1-18][EVEN][RED][BLK][ODD][19-36]
 ```
-
-- **Red numbers:** 1 3 5 7 9 12 14 16 18 19 21 23 25 27 30 32 34 36
-- **Green:** 0 only
-- **Black:** all others
 
 ## Payouts
 
@@ -54,9 +84,13 @@ Select **5. Roulette Table**, then reboot.
 | 1st / 2nd / 3rd Dozen | 2:1 |
 | Column (C1 / C2 / C3) | 2:1 |
 
-Zero (0) loses all outside bets. Straight-up bet on 0 pays normally at 35:1.
+Zero (0) loses all outside bets. Straight-up on 0 pays 35:1 as normal.
 
-## Notes
+## Channels
 
-- You can place multiple different bets in the same spin — the payout from each is calculated independently.
-- Playing without a disk is allowed but the balance is not saved when you leave.
+| Channel | Purpose |
+|---------|---------|
+| 20 | Dealer listens (players send bets here) |
+| 21 | Dealer broadcasts (players listen here) |
+
+All computers must be within wireless modem range of each other.
