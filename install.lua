@@ -57,15 +57,9 @@ local TYPES = {
         boot  = 'shell.run("/casino/slots/startup.lua")',
     },
     {
-        name  = "Roulette Dealer",
-        files = { {"/roulette/dealer.lua", "/casino/roulette/dealer.lua"} },
-        boot  = 'shell.run("/casino/roulette/dealer.lua")',
-    },
-    {
-        name  = "Roulette Player",
-        files = { {"/roulette/player.lua", "/casino/roulette/player.lua"} },
-        ask   = "player number (1-6)",
-        boot  = nil,   -- filled in after asking
+        name  = "Roulette Table",
+        files = { {"/roulette/table.lua", "/casino/roulette/table.lua"} },
+        boot  = 'shell.run("/casino/roulette/table.lua")',
     },
 }
 
@@ -107,13 +101,6 @@ if ct.ask then
             return
         end
         ct.boot = ('shell.run("/casino/poker/player.lua", "%d")'):format(n)
-    elseif ct.name == "Roulette Player" then
-        local n = tonumber(extra)
-        if not n or n < 1 or n > 6 then
-            print("Player number must be 1-6. Exiting.")
-            return
-        end
-        ct.boot = ('shell.run("/casino/roulette/player.lua", "%d")'):format(n)
     end
 end
 
