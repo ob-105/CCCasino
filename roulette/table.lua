@@ -48,8 +48,8 @@ local dealer_mon = peripheral.wrap(back_net.monitor)
 -- On a 5×3 monitor this lands around scale 3–4, making text readable from a distance.
 for _, s in ipairs({5.0, 4.5, 4.0, 3.5, 3.0, 2.5, 2.0, 1.5, 1.0}) do
     dealer_mon.setTextScale(s)
-    local w = dealer_mon.getSize()
-    if w >= 30 then break end
+    local w, h = dealer_mon.getSize()
+    if w >= 20 and h >= 7 then break end  -- biggest scale that still fits the 7-row layout
 end
 local DW, DH = dealer_mon.getSize()
 
@@ -222,8 +222,9 @@ local function add_zone(x1,y1,x2,y2,kind,key)
 end
 
 -- ── dealer render ─────────────────────────────────────────────────────────────
-local STRIP_CELLS = 5
-local CELL_W      = 4
+local CELL_W      = 5
+local STRIP_CELLS = math.max(3, math.floor((DW - 6) / CELL_W))
+if STRIP_CELLS % 2 == 0 then STRIP_CELLS = STRIP_CELLS - 1 end  -- keep odd so there's a center cell
 
 local function draw_strip(center, highlight)
     local total_w = STRIP_CELLS*CELL_W
@@ -239,7 +240,7 @@ local function draw_strip(center, highlight)
         if highlight==n and mid then bg=colors.lime; fg=colors.black end
         local cx     = sx+(i-1)*CELL_W
         fill(cx,3,cx+CELL_W-1,3,bg)
-        mp(cx,3,string.format(" %2d ",n),fg,bg)
+        mp(cx,3,string.format(" %2d  ",n),fg,bg)  -- 5-char cell for CELL_W=5
     end
     M.setBackgroundColor(colors.black); M.setTextColor(colors.white)
     local asx = math.max(1,sx-2)
@@ -251,14 +252,58 @@ local function render_dealer()
     M=dealer_mon; CW=DW; CH=DH; CZ={}
     M.setBackgroundColor(colors.black); M.clear()
 
-    fill(1,1,CW,1,colors.green)
-    centre(1,"\x04\x04\x04  ROULETTE  \x04\x04\x04",colors.black,colors.green)
+    -- Animation phase derived from wall-clock time (no extra timer needed)
+    local t = math.floor(os.epoch("utc") / 400) % 8
 
-    local ph_txt={betting=" BETS OPEN ",spinning=" SPINNING! ",result="  RESULT  "}
-    local ph_col={betting=colors.lime,  spinning=colors.orange, result=colors.yellow}
+    -- ── row 1: animated header ────────────────────────────────────────────────
+    local hdr_bg
+    if game_phase=="result" and last_num~=nil then
+        hdr_bg = num_bg(last_num)
+    elseif game_phase=="spinning" then
+        local sc={colors.orange,colors.yellow,colors.orange,colors.red,colors.orange,colors.yellow,colors.orange,colors.red}
+        hdr_bg = sc[t+1]
+    elseif countdown>0 then
+        if countdown<=5 then
+            hdr_bg = t%2==0 and colors.red or colors.orange
+        elseif countdown<=15 then
+            hdr_bg = t%2==0 and colors.orange or colors.yellow
+        else
+            hdr_bg = colors.yellow
+        end
+    else
+        local ic={colors.green,colors.lime,colors.green,colors.green,colors.lime,colors.green,colors.green,colors.lime}
+        hdr_bg = ic[t+1]
+    end
+    fill(1,1,CW,1,hdr_bg)
+    centre(1,"\x04\x04\x04  ROULETTE  \x04\x04\x04",colors.black,hdr_bg)
+
+    -- ── row 2: phase / countdown / status ─────────────────────────────────────
     fill(1,2,CW,2,colors.black)
-    centre(2, ph_txt[game_phase] or "", colors.black, ph_col[game_phase] or colors.gray)
+    if game_phase=="spinning" then
+        fill(1,2,CW,2,colors.orange)
+        centre(2,"  SPINNING!  ",colors.black,colors.orange)
+    elseif countdown>0 then
+        local pc
+        if countdown<=5 then pc = t%2==0 and colors.red or colors.orange
+        elseif countdown<=15 then pc = t%2==0 and colors.orange or colors.yellow
+        else pc = colors.yellow end
+        fill(1,2,CW,2,pc)
+        centre(2,"  Spinning in "..countdown.."s  ",colors.black,pc)
+    else
+        local nr=count_ready(); local nc=count_connected()
+        if nc==0 then
+            centre(2,"Waiting for players...",colors.gray,colors.black)
+        elseif nr==0 then
+            centre(2,"Bets open  ("..nc.." player"..(nc~=1 and "s" or "")..")",colors.lime,colors.black)
+        elseif nr<2 then
+            centre(2,"("..nr.."/"..nc.." ready — need 2+)",colors.gray,colors.black)
+        else
+            fill(1,2,CW,2,colors.lime)
+            centre(2,"  "..nr.." / "..nc.." ready!  ",colors.black,colors.lime)
+        end
+    end
 
+    -- ── row 3: wheel strip ────────────────────────────────────────────────────
     if last_num~=nil then
         draw_strip(wheel_pos(last_num), game_phase=="result" and last_num or nil)
     else
@@ -266,6 +311,7 @@ local function render_dealer()
         centre(3," \x1b  \x1b  \x1b  \x1b  \x1b ",colors.gray,colors.black)
     end
 
+    -- ── rows 4-5: result / spinning effect ────────────────────────────────────
     fill(1,4,CW,5,colors.black)
     if game_phase=="result" and last_num~=nil then
         local rb = last_num==0 and "Green" or (RED_SET[last_num] and "Red" or "Black")
@@ -274,26 +320,15 @@ local function render_dealer()
         centre(4,"  "..last_num.."  ",colors.white,bg)
         centre(5,"  "..rb:upper().."  ",colors.white,bg)
     elseif game_phase=="spinning" then
-        fill(1,4,CW,5,colors.orange)
-        centre(4,"  SPINNING  ",colors.black,colors.orange)
-        centre(5,string.rep("\x04",math.min(CW-4,14)),colors.black,colors.orange)
-    elseif game_phase=="betting" then
-        local nr=count_ready(); local nc=count_connected()
-        if countdown>0 then
-            fill(1,4,CW,4,colors.orange)
-            centre(4,"  Spinning in "..countdown.."s  ",colors.black,colors.orange)
-            fill(1,5,CW,5,colors.black)
-            centre(5,nr.." / "..nc.." players ready",colors.white,colors.black)
-        elseif nc==0 then
-            centre(4,"Waiting for players...",colors.gray,colors.black)
-        elseif nr==0 then
-            centre(4,"Bets open  ("..nc.." player"..(nc~=1 and "s" or "")..")",colors.lime,colors.black)
-        else
-            centre(4,nr.." / "..nc.." ready",colors.white,colors.black)
-            if nr<2 then centre(5,"Need 2+ to start",colors.gray,colors.black) end
-        end
+        local sc2={colors.orange,colors.yellow,colors.orange,colors.red,colors.orange,colors.yellow,colors.orange,colors.red}
+        local sbg=sc2[t+1]
+        fill(1,4,CW,4,sbg)
+        centre(4," \x1a  \x1b  \x1a  \x1b  \x1a ",colors.black,sbg)
+        fill(1,5,CW,5,colors.black)
+        centre(5,string.rep("\x04",math.min(CW-4,16)),colors.gray,colors.black)
     end
 
+    -- ── row 6: player status ──────────────────────────────────────────────────
     if CH>=6 then
         fill(1,6,CW,6,colors.black)
         mp(2,6,"P:",colors.gray,colors.black)
@@ -310,11 +345,12 @@ local function render_dealer()
         if not any then mp(5,6,"(no players)",colors.gray,colors.black) end
     end
 
+    -- ── row 7: history ────────────────────────────────────────────────────────
     if CH>=7 and #history>0 then
         fill(1,7,CW,CH,colors.black)
         mp(2,7,":",colors.gray,colors.black)
         local hx=4
-        for i=#history,math.max(1,#history-7),-1 do
+        for i=#history,math.max(1,#history-10),-1 do
             local n=history[i]; local lbl=string.format(" %d ",n)
             if hx+#lbl-1<=CW then
                 fill(hx,7,hx+#lbl-1,7,num_bg(n))
@@ -444,6 +480,14 @@ local function render_player(seat, result_hl)
                     centre(mid+1,"  Break even  ",colors.gray,colors.black)
                 end
             end
+        elseif countdown>0 and (ps.phase=="betting" or ps.phase=="ready") then
+            local mid=math.floor((mid_top+mid_bot)/2)
+            local pt=math.floor(os.epoch("utc")/300)%2
+            local cd_col = countdown<=5  and (pt==0 and colors.red    or colors.orange)
+                        or countdown<=15 and (pt==0 and colors.orange  or colors.yellow)
+                        or colors.yellow
+            fill(1,mid,CW,mid,cd_col)
+            centre(mid,"  "..countdown.."s  ",colors.black,cd_col)
         end
     end
 
@@ -553,8 +597,37 @@ function do_spin()   -- forward-declared via function statement so check_ready c
     end
 
     M=dealer_mon; CW=DW; CH=DH
-    draw_strip(t_idx,result); sleep(0.5)
-    for _=1,3 do fill(1,3,CW,3,colors.black); sleep(0.15); draw_strip(t_idx,result); sleep(0.15) end
+    draw_strip(t_idx,result); sleep(0.4)
+    -- Ball-landing bounce: flash the strip row between result colour and black
+    for i=1,6 do
+        local bg=i%2==0 and num_bg(result) or colors.black
+        fill(1,3,CW,3,bg); sleep(0.09)
+    end
+    draw_strip(t_idx,result)
+    -- Simultaneous result-colour flash on every player screen
+    local rbg=num_bg(result)
+    for seat=1,NUM_SEATS do
+        local ps=p[seat]
+        if ps.phase=="spinning" and ps.mon then
+            M=ps.mon; CW=ps.W; CH=ps.H
+            fill(1,1,CW,CH,rbg)
+            centre(math.floor(CH/2),"  "..result.."  ",colors.white,rbg)
+        end
+    end
+    sleep(0.6)
+    -- Dealer result announcement flash
+    local rb_str=result==0 and "GREEN" or (RED_SET[result] and "RED" or "BLACK")
+    M=dealer_mon; CW=DW; CH=DH
+    for i=1,8 do
+        local bg=i%2==0 and rbg or colors.black
+        fill(1,4,CW,5,bg)
+        if i%2==0 then
+            centre(4,"  "..result.."  "..rb_str.."  ",colors.white,bg)
+            centre(5,string.rep("\x01",math.min(CW-4,20)),colors.white,bg)
+        end
+        sleep(0.09)
+    end
+    draw_strip(t_idx,result)
 
     last_num=result
     history[#history+1]=result
@@ -571,6 +644,18 @@ function do_spin()   -- forward-declared via function statement so check_ready c
             flush_wallet(seat)
             clear_bets(seat)
             ps.phase="result"
+            -- Win celebration flash on player screen
+            if ps.last_net and ps.last_net>0 and ps.mon then
+                M=ps.mon; CW=ps.W; CH=ps.H
+                local wfc={colors.lime,colors.green,colors.yellow,colors.lime,colors.green,colors.lime,colors.yellow,colors.lime}
+                for _,fc in ipairs(wfc) do
+                    fill(1,1,CW,CH,fc)
+                    centre(math.floor(CH/2)-1,string.rep("\x01",math.min(CW-2,26)),colors.black,fc)
+                    centre(math.floor(CH/2),  "  WIN!  +"..ps.last_net.."c  ",      colors.black,fc)
+                    centre(math.floor(CH/2)+1,string.rep("\x01",math.min(CW-2,26)),colors.black,fc)
+                    sleep(0.07)
+                end
+            end
             render_player(seat,result)
         end
     end
@@ -662,6 +747,11 @@ while true do
                 if countdown>0 then tick_tmr=os.startTimer(1) end
             end
             render_dealer()
+            -- Keep countdown visible and pulsing on all active player screens
+            for seat=1,NUM_SEATS do
+                local ph=p[seat].phase
+                if ph=="betting" or ph=="ready" then render_player(seat) end
+            end
         end
     end
 end
