@@ -35,7 +35,13 @@ end
 local back_net   = scan_side("back")
 assert(back_net.monitor, "No monitor found on back wired network (dealer display)")
 local dealer_mon = peripheral.wrap(back_net.monitor)
-dealer_mon.setTextScale(1.0)
+-- Pick the largest text scale where the monitor is still at least 30 chars wide.
+-- On a 5×3 monitor this lands around scale 3–4, making text readable from a distance.
+for _, s in ipairs({5.0, 4.5, 4.0, 3.5, 3.0, 2.5, 2.0, 1.5, 1.0}) do
+    dealer_mon.setTextScale(s)
+    local w = dealer_mon.getSize()
+    if w >= 30 then break end
+end
 local DW, DH = dealer_mon.getSize()
 
 local SEAT_SIDES = {"bottom", "left", "right", "front"}
@@ -77,6 +83,10 @@ end
 local WHEEL = {0,32,15,19,4,21,2,25,17,34,6,27,13,36,11,30,8,23,10,5,24,16,33,1,20,14,31,9,22,18,29,7,28,12,35,3,26}
 local RED_SET = {}
 for _, n in ipairs({1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}) do RED_SET[n]=true end
+
+-- Casino chip colours (background / foreground per denomination)
+local CHIP_BG = {[1]=colors.white,[5]=colors.red,[10]=colors.blue,[25]=colors.lime,[50]=colors.gray,[100]=colors.purple}
+local CHIP_FG = {[1]=colors.black,[5]=colors.white,[10]=colors.white,[25]=colors.black,[50]=colors.white,[100]=colors.white}
 
 local function num_bg(n)
     if n==0 then return colors.green end
@@ -367,6 +377,7 @@ local function render_player(seat, result_hl)
     if not ps.mon then return end
     M=ps.mon; CW=ps.W; CH=ps.H; ps.zones={}; CZ=ps.zones
 
+    -- ── attract screen ────────────────────────────────────────────────────────
     if ps.phase=="attract" then
         M.setBackgroundColor(colors.black); M.clear()
         fill(1,1,CW,1,colors.green)
@@ -382,55 +393,100 @@ local function render_player(seat, result_hl)
     end
 
     M.setBackgroundColor(colors.black); M.clear()
-    fill(1,1,CW,1,colors.green)
-    centre(1,"\x04 ROULETTE  Seat "..seat.." \x04",colors.black,colors.green)
 
+    -- ── row 1: header ─────────────────────────────────────────────────────────
+    fill(1,1,CW,1,colors.green)
+    local pname = ps.wd and ps.wd.player_name or ("Seat "..seat)
+    centre(1," \x04 "..pname.." \x04 ",colors.black,colors.green)
+
+    -- ── row 2: balance ────────────────────────────────────────────────────────
     fill(1,2,CW,2,colors.black)
     if ps.wd then
-        mp(2,2,"\x10 "..ps.chips.." chips",colors.white,colors.black)
-        mp(CW-8,2,"[disk ok]",colors.lime,colors.black)
+        local bc = ps.chips>500 and colors.lime or ps.chips>100 and colors.white or colors.yellow
+        mp(2,2,"\x07 "..ps.chips.." chips",bc,colors.black)
     else
         centre(2,"!! Insert disk to save !!",colors.orange,colors.black)
     end
 
+    -- ── row 3: chip selector (casino chip colours) ────────────────────────────
     fill(1,3,CW,3,colors.black)
-    mp(2,3,"CHIP:",colors.lightGray,colors.black)
-    local cx=8
+    mp(2,3,"BET",colors.gray,colors.black)
+    local cx=6
     for _,cv in ipairs({1,5,10,25,50,100}) do
         local lbl=tostring(cv); local bw=#lbl+2; local sel=cv==ps.chip_val
-        fill(cx,3,cx+bw-1,3,sel and colors.orange or colors.gray)
-        mp(cx+1,3,lbl,sel and colors.black or colors.white,sel and colors.orange or colors.gray)
+        local cbg = sel and CHIP_BG[cv] or colors.gray
+        local cfg = sel and CHIP_FG[cv] or colors.lightGray
+        fill(cx,3,cx+bw-1,3,cbg)
+        mp(cx+1,3,lbl,cfg,cbg)
         add_zone(cx,3,cx+bw-1,3,"chip",cv); cx=cx+bw+1
     end
-
-    fill(1,4,CW,5,colors.black)
-    local ph_msgs={waiting="Waiting...",betting="  Place your bets!  ",
-                   ready="  Bets locked \x11 waiting  ",spinning="  Wheel is spinning!  ",result=""}
-    local ph_cols={waiting=colors.gray,betting=colors.lime,ready=colors.yellow,
-                   spinning=colors.orange,result=colors.white}
-    centre(4,ph_msgs[ps.phase] or ps.phase,ph_cols[ps.phase] or colors.white,colors.black)
-    local tot=total_bets(seat)
-    if tot>0 and (ps.phase=="betting" or ps.phase=="ready") then
-        centre(5,"Total: "..tot.." chips",colors.lightGray,colors.black)
+    -- Selected chip indicator arrow
+    do
+        local ix=6
+        for _,cv in ipairs({1,5,10,25,50,100}) do
+            local bw=#tostring(cv)+2
+            if cv==ps.chip_val then
+                mp(ix-1,3,"\x10",CHIP_BG[cv],colors.black)
+                mp(ix+bw,3,"\x11",CHIP_BG[cv],colors.black)
+            end
+            ix=ix+bw+1
+        end
     end
 
+    -- ── rows 4–5: phase banner + context ─────────────────────────────────────
+    fill(1,4,CW,5,colors.black)
+    local tot=total_bets(seat)
+    if ps.phase=="betting" then
+        local banner_bg = colors.lime
+        local banner_txt
+        if countdown>0 then
+            banner_bg = colors.orange
+            banner_txt = " Spinning in "..countdown.."s "
+        else
+            banner_txt = "  BETS OPEN  "
+        end
+        fill(1,4,CW,4,banner_bg)
+        centre(4,banner_txt,colors.black,banner_bg)
+        if tot>0 then
+            centre(5,"Total bet: "..tot.."  \x07  "..ps.chips.." remaining",colors.lightGray,colors.black)
+        else
+            centre(5,"Select chip above, then tap the board",colors.gray,colors.black)
+        end
+    elseif ps.phase=="ready" then
+        fill(1,4,CW,4,colors.yellow)
+        centre(4,"  BETS LOCKED  ",colors.black,colors.yellow)
+        if countdown>0 then
+            centre(5,"Spinning in "..countdown.."s",colors.orange,colors.black)
+        else
+            local nr=count_ready(); local nc=count_connected()
+            centre(5,"Waiting — "..nr.."/"..nc.." ready",colors.gray,colors.black)
+        end
+    elseif ps.phase=="spinning" then
+        fill(1,4,CW,4,colors.orange)
+        centre(4,"  SPINNING  ",colors.black,colors.orange)
+    end
+
+    -- ── rows 6–10: betting board ──────────────────────────────────────────────
     draw_board(seat, result_hl)
 
+    -- ── H-3 to H-2: result ───────────────────────────────────────────────────
     local res_y=CH-3
     fill(1,res_y,CW,res_y+1,colors.black)
     if ps.phase=="result" and ps.last_num~=nil then
         local rb=ps.last_num==0 and "Green" or (RED_SET[ps.last_num] and "Red" or "Black")
         fill(1,res_y,CW,res_y,num_bg(ps.last_num))
-        centre(res_y,"  Result: "..ps.last_num.."  "..rb.."  ",colors.white,num_bg(ps.last_num))
+        centre(res_y,"  "..ps.last_num.."  \x07  "..rb.."  ",colors.white,num_bg(ps.last_num))
         if ps.last_net and ps.last_net>0 then
-            centre(res_y+1,"  WIN! +"..ps.last_net.." chips  ",colors.black,colors.lime)
+            fill(1,res_y+1,CW,res_y+1,colors.lime)
+            centre(res_y+1,"  WIN!  +"..ps.last_net.." chips  ",colors.black,colors.lime)
         elseif ps.last_net and ps.last_net<0 then
-            centre(res_y+1,"  Lost "..(-ps.last_net).." chips  ",colors.red,colors.black)
+            centre(res_y+1,"  Lost "..(- ps.last_net).." chips  ",colors.red,colors.black)
         elseif ps.last_net then
             centre(res_y+1,"  Break even  ",colors.gray,colors.black)
         end
     end
 
+    -- ── H-1 to H: action buttons ─────────────────────────────────────────────
     local by=CH-1
     fill(1,by,CW,CH,colors.black)
     if ps.phase=="betting" then
