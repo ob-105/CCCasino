@@ -132,9 +132,9 @@ local function draw_reel(st,cx,cy,sym,stopped,flash_col)
     fill(st,cx,cy,cx+REEL_W-1,cy+2,bg)
     st.mon.setBackgroundColor(bg)
     st.mon.setTextColor(stopped and colors.black or colors.gray)
-    st.mon.setCursorPos(cx,  cy);   st.mon.write("\xd5"..string.rep("\xcd",REEL_W-2).."\xb8")
-    st.mon.setCursorPos(cx,  cy+1); st.mon.write("\xb3"..string.rep(" ",REEL_W-2).."\xb3")
-    st.mon.setCursorPos(cx,  cy+2); st.mon.write("\xd4"..string.rep("\xcd",REEL_W-2).."\xbe")
+    st.mon.setCursorPos(cx,  cy);   st.mon.write("+"..string.rep("-",REEL_W-2).."+")
+    st.mon.setCursorPos(cx,  cy+1); st.mon.write("|"..string.rep(" ",REEL_W-2).."|")
+    st.mon.setCursorPos(cx,  cy+2); st.mon.write("+"..string.rep("-",REEL_W-2).."+")
     local sx = cx + math.floor((REEL_W-#sym.disp)/2)
     st.mon.setTextColor(sfg); st.mon.setBackgroundColor(bg)
     st.mon.setCursorPos(sx,cy+1)
@@ -174,12 +174,12 @@ local HDR_COLS = {
     colors.magenta, colors.pink,
 }
 local PAYOUT_LINES = {
-    " 7  7  7  \xd7 50    JACKPOT!",
-    " BAR BAR BAR  \xd7 20",
-    " BEL BEL BEL  \xd7 10",
-    " CHR CHR CHR  \xd7 8",
-    " LEM LEM LEM  \xd7 5",
-    " Two 7s \xd7 5 | Pair \xd7 2 | Cherry \xd7 1",
+    " 7  7  7   x50  JACKPOT!",
+    " BAR BAR BAR  x20",
+    " BEL BEL BEL  x10",
+    " CHR CHR CHR  x8",
+    " LEM LEM LEM  x5",
+    " Two 7s x5 | Pair x2 | Cherry x1",
 }
 
 -- ── render ────────────────────────────────────────────────────────────────────
@@ -196,19 +196,19 @@ local function render(st, disp_reels, stopped_flags)
     local hc1 = HDR_COLS[t+1]
     local hc2 = HDR_COLS[t2+1]
     fill(st,1,1,W,1,hc1)
-    local stars = string.rep("\x0f", math.max(0,math.floor((W-16)/2)))
+    local stars = string.rep("*", math.max(0,math.floor((W-16)/2)))
     centre(st,1, stars.."  LUCKY SLOTS  "..stars, colors.black, hc1)
     fill(st,1,2,W,2,hc2)
     -- alternating sparkle bar on header row 2
     local bar = ""
-    for i=1,W do bar=bar..(i%4==0 and "\x04" or "\xcd") end
+    for i=1,W do bar=bar..(i%4==0 and "*" or "=") end
     mp(st,1,2, bar:sub(1,W), colors.black, hc2)
 
     -- balance row
     fill(st,1,3,W,3,colors.black)
     if st.wd then
         local name = (st.wd.player_name or "Player"):sub(1,12)
-        mp(st,2,3, "\x10 "..name, colors.white, colors.black)
+        mp(st,2,3, "> "..name, colors.white, colors.black)
         local cs = st.chips.."c"
         mp(st,W-#cs-1,3, cs, colors.yellow, colors.black)
     else
@@ -222,14 +222,14 @@ local function render(st, disp_reels, stopped_flags)
     end
     -- payline arrows
     st.mon.setBackgroundColor(colors.black); st.mon.setTextColor(colors.yellow)
-    st.mon.setCursorPos(1,L.pl); st.mon.write("\x10")
-    st.mon.setCursorPos(W,L.pl); st.mon.write("\x11")
+    st.mon.setCursorPos(1,L.pl); st.mon.write(">")
+    st.mon.setCursorPos(W,L.pl); st.mon.write("<")
 
     -- win/loss result
     fill(st,1,L.res,W,L.res,colors.black)
     if st.last_win ~= nil then
         if st.last_win > 0 then
-            centre(st,L.res, "  \x01  WIN!  +"..st.last_win.."c  \x01  ", colors.black, colors.lime)
+            centre(st,L.res, "  *  WIN!  +"..st.last_win.."c  *  ", colors.black, colors.lime)
         else
             centre(st,L.res, "  No win this spin  ", colors.gray, colors.black)
         end
@@ -255,11 +255,11 @@ local function render(st, disp_reels, stopped_flags)
     if L.sy+sh-1 <= H-1 then
         if st.spinning then
             fill(st,1,L.sy,W,L.sy+sh-1,colors.black)
-            centre(st,L.sy, "  \x1b\x1b  SPINNING...  \x1a\x1a  ", colors.yellow, colors.black)
+            centre(st,L.sy, "  <<  SPINNING...  >>  ", colors.yellow, colors.black)
         elseif not st.wd then
             fill(st,1,L.sy,W,L.sy+sh-1,colors.black)
         elseif st.chips >= st.bet then
-            local lbl="  \x10  SPIN  "..st.bet.."c  \x11  "
+            local lbl="  >  SPIN  "..st.bet.."c  <  "
             local bx2=math.max(1,math.floor((W-#lbl)/2)+1)
             local ex=math.min(W,bx2+#lbl-1)
             abtn(st, bx2,L.sy, ex,L.sy+sh-1, "spin", lbl, colors.green, colors.black)
@@ -324,11 +324,11 @@ local function do_spin(st)
                   colors.orange,colors.yellow,colors.lime,colors.yellow,colors.orange}
         for _,c in ipairs(jc) do
             fill(st,1,1,st.W,st.H,c)
-            centre(st,math.floor(st.H/2)-2, string.rep("\x01",st.W-2), colors.black,c)
+            centre(st,math.floor(st.H/2)-2, string.rep("*",st.W-2), colors.black,c)
             centre(st,math.floor(st.H/2)-1, "  JACKPOT!!!  ",          colors.black,c)
             centre(st,math.floor(st.H/2),   "  +"..win.." CHIPS!  ",   colors.black,c)
             centre(st,math.floor(st.H/2)+1, "   7   7   7   ",         colors.black,c)
-            centre(st,math.floor(st.H/2)+2, string.rep("\x01",st.W-2), colors.black,c)
+            centre(st,math.floor(st.H/2)+2, string.rep("*",st.W-2), colors.black,c)
             sleep(0.15)
         end
         sleep(1.2)
@@ -338,9 +338,9 @@ local function do_spin(st)
                   colors.lime,colors.green,colors.lime,colors.green}
         for _,fc in ipairs(wc) do
             fill(st,1,1,st.W,st.H,fc)
-            centre(st,math.floor(st.H/2)-1, string.rep("\x01",st.W-2), colors.black,fc)
+            centre(st,math.floor(st.H/2)-1, string.rep("*",st.W-2), colors.black,fc)
             centre(st,math.floor(st.H/2),   "  WIN!  +"..win.."c  ",   colors.black,fc)
-            centre(st,math.floor(st.H/2)+1, string.rep("\x01",st.W-2), colors.black,fc)
+            centre(st,math.floor(st.H/2)+1, string.rep("*",st.W-2), colors.black,fc)
             sleep(0.1)
         end
         sleep(0.4)

@@ -244,8 +244,8 @@ local function draw_strip(center, highlight)
     end
     M.setBackgroundColor(colors.black); M.setTextColor(colors.white)
     local asx = math.max(1,sx-2)
-    M.setCursorPos(asx,3); M.write("\x11\x11")
-    if sx+total_w+1<=CW then M.setCursorPos(sx+total_w+1,3); M.write("\x10\x10") end
+    M.setCursorPos(asx,3); M.write("<<")
+    if sx+total_w+1<=CW then M.setCursorPos(sx+total_w+1,3); M.write(">>") end
 end
 
 local function render_dealer()
@@ -275,7 +275,7 @@ local function render_dealer()
         hdr_bg = ic[t+1]
     end
     fill(1,1,CW,1,hdr_bg)
-    centre(1,"\x04\x04\x04  ROULETTE  \x04\x04\x04",colors.black,hdr_bg)
+    centre(1,"***  ROULETTE  ***",colors.black,hdr_bg)
 
     -- ── row 2: phase / countdown / status ─────────────────────────────────────
     fill(1,2,CW,2,colors.black)
@@ -308,7 +308,7 @@ local function render_dealer()
         draw_strip(wheel_pos(last_num), game_phase=="result" and last_num or nil)
     else
         fill(1,3,CW,3,colors.black)
-        centre(3," \x1b  \x1b  \x1b  \x1b  \x1b ",colors.gray,colors.black)
+        centre(3," <  <  <  <  < ",colors.gray,colors.black)
     end
 
     -- ── rows 4-5: result / spinning effect ────────────────────────────────────
@@ -323,9 +323,9 @@ local function render_dealer()
         local sc2={colors.orange,colors.yellow,colors.orange,colors.red,colors.orange,colors.yellow,colors.orange,colors.red}
         local sbg=sc2[t+1]
         fill(1,4,CW,4,sbg)
-        centre(4," \x1a  \x1b  \x1a  \x1b  \x1a ",colors.black,sbg)
+        centre(4," >  <  >  <  > ",colors.black,sbg)
         fill(1,5,CW,5,colors.black)
-        centre(5,string.rep("\x04",math.min(CW-4,16)),colors.gray,colors.black)
+        centre(5,string.rep("=",math.min(CW-4,16)),colors.gray,colors.black)
     end
 
     -- ── row 6: player status ──────────────────────────────────────────────────
@@ -361,7 +361,7 @@ local function render_dealer()
 end
 
 -- ── player render ─────────────────────────────────────────────────────────────
-local SPIN_FRAMES = {"  \x1b  SPINNING  \x1a  "," \x1a\x1b  SPINNING \x1a\x1b  ","\x1a\x1b\x1b  SPINNING\x1a\x1b\x1b "}
+local SPIN_FRAMES = {"  <  SPINNING  >  "," ><  SPINNING ><  ","><<  SPINNING><< "}
 local CW_B=3; local BOARD_X=2; local ZERO_W=4; local NUM_X=BOARD_X+ZERO_W
 
 local function draw_board(seat, result_hl)
@@ -426,7 +426,7 @@ local function render_player(seat, result_hl)
     if ps.phase=="attract" then
         M.setBackgroundColor(colors.black); M.clear()
         fill(1,1,CW,1,colors.green)
-        centre(1,"\x04\x04\x04  ROULETTE  \x04\x04\x04",colors.black,colors.green)
+        centre(1,"***  ROULETTE  ***",colors.black,colors.green)
         local my=math.floor(CH/2)
         centre(my,  "  Seat "..seat.."  ",  colors.yellow, colors.black)
         centre(my+2,"Insert your chip disk", colors.white,  colors.black)
@@ -438,7 +438,7 @@ local function render_player(seat, result_hl)
     -- ── row 1: name (left) + balance (right) on green bar ────────────────────
     fill(1,1,CW,1,colors.green)
     local pname     = ps.wd and ps.wd.player_name or ("Seat "..seat)
-    local chips_str = tostring(ps.chips).." \x07"
+    local chips_str = tostring(ps.chips).."c "
     local bc   = ps.chips>500 and colors.lime or ps.chips>100 and colors.white or colors.yellow
     local bcol = ps.wd and bc or colors.orange
     mp(CW-#chips_str, 1, chips_str, bcol, colors.green)
@@ -451,11 +451,11 @@ local function render_player(seat, result_hl)
         local lbl=tostring(cv); local bw=#lbl+2; local sel=cv==ps.chip_val
         local cbg=sel and CHIP_BG[cv] or colors.gray
         local cfg=sel and CHIP_FG[cv] or colors.lightGray
-        if sel and cx>1 then mp(cx,2,"\x10",CHIP_BG[cv],colors.black); cx=cx+1 end
+        if sel and cx>1 then mp(cx,2,">",CHIP_BG[cv],colors.black); cx=cx+1 end
         fill(cx,2,cx+bw-1,2,cbg); mp(cx+1,2,lbl,cfg,cbg)
         add_zone(cx,2,cx+bw-1,2,"chip",cv)
         cx=cx+bw
-        if sel then mp(cx,2,"\x11",CHIP_BG[cv],colors.black); cx=cx+2 else cx=cx+1 end
+        if sel then mp(cx,2,"<",CHIP_BG[cv],colors.black); cx=cx+2 else cx=cx+1 end
     end
 
     -- ── rows 3-7: betting board ───────────────────────────────────────────────
@@ -469,7 +469,7 @@ local function render_player(seat, result_hl)
             local mid=math.floor((mid_top+mid_bot)/2)
             local rb=ps.last_num==0 and "Green" or (RED_SET[ps.last_num] and "Red" or "Black")
             fill(1,mid,CW,mid,num_bg(ps.last_num))
-            centre(mid,"  "..ps.last_num.."  \x07  "..rb.."  ",colors.white,num_bg(ps.last_num))
+            centre(mid,"  "..ps.last_num.."  |  "..rb.."  ",colors.white,num_bg(ps.last_num))
             if mid+1<=mid_bot then
                 if ps.last_net and ps.last_net>0 then
                     fill(1,mid+1,CW,mid+1,colors.lime)
@@ -522,9 +522,9 @@ local function render_player(seat, result_hl)
         local oy=math.floor(CH/2)
         local frame=SPIN_FRAMES[(ps.spin_frame%#SPIN_FRAMES)+1]
         fill(1,oy-1,CW,oy+1,colors.orange)
-        centre(oy-1,string.rep("\x04",CW-4),colors.black,colors.orange)
+        centre(oy-1,string.rep("=",CW-4),colors.black,colors.orange)
         centre(oy,frame,colors.black,colors.orange)
-        centre(oy+1,string.rep("\x04",CW-4),colors.black,colors.orange)
+        centre(oy+1,string.rep("=",CW-4),colors.black,colors.orange)
     end
 end
 
@@ -537,9 +537,9 @@ local function update_spin_overlay(seat)
     local oy=math.floor(CH/2)
     local frame=SPIN_FRAMES[(ps.spin_frame%#SPIN_FRAMES)+1]
     fill(1,oy-1,CW,oy+1,colors.orange)
-    centre(oy-1,string.rep("\x04",CW-4),colors.black,colors.orange)
+    centre(oy-1,string.rep("=",CW-4),colors.black,colors.orange)
     centre(oy,frame,colors.black,colors.orange)
-    centre(oy+1,string.rep("\x04",CW-4),colors.black,colors.orange)
+    centre(oy+1,string.rep("=",CW-4),colors.black,colors.orange)
 end
 
 -- ── game flow ─────────────────────────────────────────────────────────────────
@@ -623,7 +623,7 @@ function do_spin()   -- forward-declared via function statement so check_ready c
         fill(1,4,CW,5,bg)
         if i%2==0 then
             centre(4,"  "..result.."  "..rb_str.."  ",colors.white,bg)
-            centre(5,string.rep("\x01",math.min(CW-4,20)),colors.white,bg)
+            centre(5,string.rep("=",math.min(CW-4,20)),colors.white,bg)
         end
         sleep(0.09)
     end
@@ -650,9 +650,9 @@ function do_spin()   -- forward-declared via function statement so check_ready c
                 local wfc={colors.lime,colors.green,colors.yellow,colors.lime,colors.green,colors.lime,colors.yellow,colors.lime}
                 for _,fc in ipairs(wfc) do
                     fill(1,1,CW,CH,fc)
-                    centre(math.floor(CH/2)-1,string.rep("\x01",math.min(CW-2,26)),colors.black,fc)
+                    centre(math.floor(CH/2)-1,string.rep("*",math.min(CW-2,26)),colors.black,fc)
                     centre(math.floor(CH/2),  "  WIN!  +"..ps.last_net.."c  ",      colors.black,fc)
-                    centre(math.floor(CH/2)+1,string.rep("\x01",math.min(CW-2,26)),colors.black,fc)
+                    centre(math.floor(CH/2)+1,string.rep("*",math.min(CW-2,26)),colors.black,fc)
                     sleep(0.07)
                 end
             end
