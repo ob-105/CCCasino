@@ -330,7 +330,7 @@ local CW_B=3; local BOARD_X=2; local ZERO_W=4; local NUM_X=BOARD_X+ZERO_W
 
 local function draw_board(seat, result_hl)
     local ps = p[seat]
-    local by = 6
+    local by = 3
     local z_bg = (result_hl==0) and colors.lime or colors.green
     fill(BOARD_X,by,BOARD_X+ZERO_W-1,by+2,z_bg)
     local zbet=ps.sbets[0] or 0
@@ -392,146 +392,95 @@ local function render_player(seat, result_hl)
         fill(1,1,CW,1,colors.green)
         centre(1,"\x04\x04\x04  ROULETTE  \x04\x04\x04",colors.black,colors.green)
         local my=math.floor(CH/2)
-        local deco=string.rep("\x04",math.min(CW-4,20))
-        centre(my-2,deco,colors.green,colors.black)
-        centre(my-1,"  Seat "..seat.."  ",colors.yellow,colors.black)
-        centre(my+1,"Insert your chip disk",colors.white,colors.black)
-        centre(my+2,"to begin",colors.lightGray,colors.black)
-        centre(my+3,deco,colors.green,colors.black)
+        centre(my,  "  Seat "..seat.."  ",  colors.yellow, colors.black)
+        centre(my+2,"Insert your chip disk", colors.white,  colors.black)
         return
     end
 
     M.setBackgroundColor(colors.black); M.clear()
 
-    -- ── row 1: header ─────────────────────────────────────────────────────────
+    -- ── row 1: name (left) + balance (right) on green bar ────────────────────
     fill(1,1,CW,1,colors.green)
-    local pname = ps.wd and ps.wd.player_name or ("Seat "..seat)
-    centre(1," \x04 "..pname.." \x04 ",colors.black,colors.green)
+    local pname     = ps.wd and ps.wd.player_name or ("Seat "..seat)
+    local chips_str = tostring(ps.chips).." \x07"
+    local bc   = ps.chips>500 and colors.lime or ps.chips>100 and colors.white or colors.yellow
+    local bcol = ps.wd and bc or colors.orange
+    mp(CW-#chips_str, 1, chips_str, bcol, colors.green)
+    mp(2, 1, pname:sub(1, CW-#chips_str-3), colors.black, colors.green)
 
-    -- ── row 2: balance ────────────────────────────────────────────────────────
+    -- ── row 2: chip selector ─────────────────────────────────────────────────
     fill(1,2,CW,2,colors.black)
-    if ps.wd then
-        local bc = ps.chips>500 and colors.lime or ps.chips>100 and colors.white or colors.yellow
-        mp(2,2,"\x07 "..ps.chips.." chips",bc,colors.black)
-    else
-        centre(2,"!! Insert disk to save !!",colors.orange,colors.black)
-    end
-
-    -- ── row 3: chip selector (casino chip colours) ────────────────────────────
-    fill(1,3,CW,3,colors.black)
-    mp(2,3,"BET",colors.gray,colors.black)
-    local cx=6
+    local cx=2
     for _,cv in ipairs({1,5,10,25,50,100}) do
         local lbl=tostring(cv); local bw=#lbl+2; local sel=cv==ps.chip_val
-        local cbg = sel and CHIP_BG[cv] or colors.gray
-        local cfg = sel and CHIP_FG[cv] or colors.lightGray
-        fill(cx,3,cx+bw-1,3,cbg)
-        mp(cx+1,3,lbl,cfg,cbg)
-        add_zone(cx,3,cx+bw-1,3,"chip",cv); cx=cx+bw+1
-    end
-    -- Selected chip indicator arrow
-    do
-        local ix=6
-        for _,cv in ipairs({1,5,10,25,50,100}) do
-            local bw=#tostring(cv)+2
-            if cv==ps.chip_val then
-                mp(ix-1,3,"\x10",CHIP_BG[cv],colors.black)
-                mp(ix+bw,3,"\x11",CHIP_BG[cv],colors.black)
-            end
-            ix=ix+bw+1
-        end
+        local cbg=sel and CHIP_BG[cv] or colors.gray
+        local cfg=sel and CHIP_FG[cv] or colors.lightGray
+        if sel and cx>1 then mp(cx,2,"\x10",CHIP_BG[cv],colors.black); cx=cx+1 end
+        fill(cx,2,cx+bw-1,2,cbg); mp(cx+1,2,lbl,cfg,cbg)
+        add_zone(cx,2,cx+bw-1,2,"chip",cv)
+        cx=cx+bw
+        if sel then mp(cx,2,"\x11",CHIP_BG[cv],colors.black); cx=cx+2 else cx=cx+1 end
     end
 
-    -- ── rows 4–5: phase banner + context ─────────────────────────────────────
-    fill(1,4,CW,5,colors.black)
-    local tot=total_bets(seat)
-    if ps.phase=="betting" then
-        local banner_bg = colors.lime
-        local banner_txt
-        if countdown>0 then
-            banner_bg = colors.orange
-            banner_txt = " Spinning in "..countdown.."s "
-        else
-            banner_txt = "  BETS OPEN  "
-        end
-        fill(1,4,CW,4,banner_bg)
-        centre(4,banner_txt,colors.black,banner_bg)
-        if tot>0 then
-            centre(5,"Total bet: "..tot.."  \x07  "..ps.chips.." remaining",colors.lightGray,colors.black)
-        else
-            centre(5,"Select chip above, then tap the board",colors.gray,colors.black)
-        end
-    elseif ps.phase=="ready" then
-        fill(1,4,CW,4,colors.yellow)
-        centre(4,"  BETS LOCKED  ",colors.black,colors.yellow)
-        if countdown>0 then
-            centre(5,"Spinning in "..countdown.."s",colors.orange,colors.black)
-        else
-            local nr=count_ready(); local nc=count_connected()
-            centre(5,"Waiting — "..nr.."/"..nc.." ready",colors.gray,colors.black)
-        end
-    elseif ps.phase=="spinning" then
-        fill(1,4,CW,4,colors.orange)
-        centre(4,"  SPINNING  ",colors.black,colors.orange)
-    end
-
-    -- ── rows 6–10: betting board ──────────────────────────────────────────────
+    -- ── rows 3-7: betting board ───────────────────────────────────────────────
     draw_board(seat, result_hl)
 
-    -- ── H-3 to H-2: result ───────────────────────────────────────────────────
-    local res_y=CH-3
-    fill(1,res_y,CW,res_y+1,colors.black)
-    if ps.phase=="result" and ps.last_num~=nil then
-        local rb=ps.last_num==0 and "Green" or (RED_SET[ps.last_num] and "Red" or "Black")
-        fill(1,res_y,CW,res_y,num_bg(ps.last_num))
-        centre(res_y,"  "..ps.last_num.."  \x07  "..rb.."  ",colors.white,num_bg(ps.last_num))
-        if ps.last_net and ps.last_net>0 then
-            fill(1,res_y+1,CW,res_y+1,colors.lime)
-            centre(res_y+1,"  WIN!  +"..ps.last_net.." chips  ",colors.black,colors.lime)
-        elseif ps.last_net and ps.last_net<0 then
-            centre(res_y+1,"  Lost "..(- ps.last_net).." chips  ",colors.red,colors.black)
-        elseif ps.last_net then
-            centre(res_y+1,"  Break even  ",colors.gray,colors.black)
+    -- ── middle: result display (rows 8 .. CH-2) ───────────────────────────────
+    local mid_top=8; local mid_bot=CH-2
+    if mid_bot>=mid_top then
+        fill(1,mid_top,CW,mid_bot,colors.black)
+        if ps.phase=="result" and ps.last_num~=nil then
+            local mid=math.floor((mid_top+mid_bot)/2)
+            local rb=ps.last_num==0 and "Green" or (RED_SET[ps.last_num] and "Red" or "Black")
+            fill(1,mid,CW,mid,num_bg(ps.last_num))
+            centre(mid,"  "..ps.last_num.."  \x07  "..rb.."  ",colors.white,num_bg(ps.last_num))
+            if mid+1<=mid_bot then
+                if ps.last_net and ps.last_net>0 then
+                    fill(1,mid+1,CW,mid+1,colors.lime)
+                    centre(mid+1,"  WIN!  +"..ps.last_net.." chips  ",colors.black,colors.lime)
+                elseif ps.last_net and ps.last_net<0 then
+                    centre(mid+1,"  Lost "..(- ps.last_net).." chips  ",colors.red,colors.black)
+                elseif ps.last_net then
+                    centre(mid+1,"  Break even  ",colors.gray,colors.black)
+                end
+            end
         end
     end
 
-    -- ── H-1 to H: action buttons ─────────────────────────────────────────────
+    -- ── bottom 2 rows: action buttons ─────────────────────────────────────────
     local by=CH-1
     fill(1,by,CW,CH,colors.black)
     if ps.phase=="betting" then
-        local tot2=total_bets(seat)
-        if tot2>0 then
+        local tot=total_bets(seat)
+        if tot>0 then
             local split=math.floor(CW*2/5)
             fill(1,by,split,CH,colors.orange)
-            bcentre(by,  1,split,"CLEAR",colors.black,colors.orange)
-            bcentre(by+1,1,split,"BETS", colors.black,colors.orange)
+            bcentre(by,  1,split,"CLEAR BETS",colors.black,colors.orange)
             add_zone(1,by,split,CH,"action","clear")
-            local can=ps.chips>=tot2
+            local can=ps.chips>=tot
             local rbg=can and colors.green or colors.gray
             local rfg=can and colors.black or colors.white
             fill(split+1,by,CW,CH,rbg)
-            bcentre(by,  split+1,CW,"READY",rfg,rbg)
-            bcentre(by+1,split+1,CW,can and (tot2.."c") or "need more chips",rfg,rbg)
+            bcentre(by,   split+1,CW,"READY",  rfg,rbg)
+            bcentre(by+1, split+1,CW,tot.."c", rfg,rbg)
             if can then add_zone(split+1,by,CW,CH,"action","ready") end
         else
             fill(1,by,CW,CH,colors.gray)
-            centre(by,  "Tap the board to place bets",colors.lightGray,colors.gray)
-            centre(by+1,"then press READY to lock in",colors.lightGray,colors.gray)
         end
     elseif ps.phase=="ready" then
         fill(1,by,CW,CH,colors.orange)
-        centre(by,  "CANCEL READY",             colors.black,colors.orange)
-        centre(by+1,"tap to take your bets back",colors.black,colors.orange)
+        bcentre(by,  1,CW,"CANCEL READY",colors.black,colors.orange)
         add_zone(1,by,CW,CH,"action","unready")
     end
 
+    -- ── spinning overlay ──────────────────────────────────────────────────────
     if ps.phase=="spinning" then
         local oy=math.floor(CH/2)
         local frame=SPIN_FRAMES[(ps.spin_frame%#SPIN_FRAMES)+1]
-        fill(3,oy-1,CW-2,oy+1,colors.orange)
-        centre(oy-1,string.rep("\x04",CW-6),colors.black,colors.orange)
+        fill(1,oy-1,CW,oy+1,colors.orange)
+        centre(oy-1,string.rep("\x04",CW-4),colors.black,colors.orange)
         centre(oy,frame,colors.black,colors.orange)
-        centre(oy+1,string.rep("\x04",CW-6),colors.black,colors.orange)
+        centre(oy+1,string.rep("\x04",CW-4),colors.black,colors.orange)
     end
 end
 
@@ -543,10 +492,10 @@ local function update_spin_overlay(seat)
     ps.spin_frame=ps.spin_frame+1
     local oy=math.floor(CH/2)
     local frame=SPIN_FRAMES[(ps.spin_frame%#SPIN_FRAMES)+1]
-    fill(3,oy-1,CW-2,oy+1,colors.orange)
-    centre(oy-1,string.rep("\x04",CW-6),colors.black,colors.orange)
+    fill(1,oy-1,CW,oy+1,colors.orange)
+    centre(oy-1,string.rep("\x04",CW-4),colors.black,colors.orange)
     centre(oy,frame,colors.black,colors.orange)
-    centre(oy+1,string.rep("\x04",CW-6),colors.black,colors.orange)
+    centre(oy+1,string.rep("\x04",CW-4),colors.black,colors.orange)
 end
 
 -- ── game flow ─────────────────────────────────────────────────────────────────
