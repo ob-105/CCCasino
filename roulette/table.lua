@@ -275,7 +275,7 @@ local function render_dealer()
         hdr_bg = ic[t+1]
     end
     fill(1,1,CW,1,hdr_bg)
-    centre(1,"***  ROULETTE  ***",colors.black,hdr_bg)
+    centre(1,"\x9f\x9f\x9f  ROULETTE  \x9f\x9f\x9f",colors.black,hdr_bg)
 
     -- ── row 2: phase / countdown / status ─────────────────────────────────────
     fill(1,2,CW,2,colors.black)
@@ -325,7 +325,7 @@ local function render_dealer()
         fill(1,4,CW,4,sbg)
         centre(4," >  <  >  <  > ",colors.black,sbg)
         fill(1,5,CW,5,colors.black)
-        centre(5,string.rep("=",math.min(CW-4,16)),colors.gray,colors.black)
+        centre(5,string.rep("\x9f",math.min(CW-4,16)),colors.gray,colors.black)
     end
 
     -- ── row 6: player status ──────────────────────────────────────────────────
@@ -426,7 +426,7 @@ local function render_player(seat, result_hl)
     if ps.phase=="attract" then
         M.setBackgroundColor(colors.black); M.clear()
         fill(1,1,CW,1,colors.green)
-        centre(1,"***  ROULETTE  ***",colors.black,colors.green)
+        centre(1,"\x9f\x9f\x9f  ROULETTE  \x9f\x9f\x9f",colors.black,colors.green)
         local my=math.floor(CH/2)
         centre(my,  "  Seat "..seat.."  ",  colors.yellow, colors.black)
         centre(my+2,"Insert your chip disk", colors.white,  colors.black)
@@ -522,9 +522,9 @@ local function render_player(seat, result_hl)
         local oy=math.floor(CH/2)
         local frame=SPIN_FRAMES[(ps.spin_frame%#SPIN_FRAMES)+1]
         fill(1,oy-1,CW,oy+1,colors.orange)
-        centre(oy-1,string.rep("=",CW-4),colors.black,colors.orange)
+        centre(oy-1,string.rep("\x9f",CW-4),colors.black,colors.orange)
         centre(oy,frame,colors.black,colors.orange)
-        centre(oy+1,string.rep("=",CW-4),colors.black,colors.orange)
+        centre(oy+1,string.rep("\x9f",CW-4),colors.black,colors.orange)
     end
 end
 
@@ -537,9 +537,9 @@ local function update_spin_overlay(seat)
     local oy=math.floor(CH/2)
     local frame=SPIN_FRAMES[(ps.spin_frame%#SPIN_FRAMES)+1]
     fill(1,oy-1,CW,oy+1,colors.orange)
-    centre(oy-1,string.rep("=",CW-4),colors.black,colors.orange)
+    centre(oy-1,string.rep("\x9f",CW-4),colors.black,colors.orange)
     centre(oy,frame,colors.black,colors.orange)
-    centre(oy+1,string.rep("=",CW-4),colors.black,colors.orange)
+    centre(oy+1,string.rep("\x9f",CW-4),colors.black,colors.orange)
 end
 
 -- ── game flow ─────────────────────────────────────────────────────────────────
@@ -623,7 +623,7 @@ function do_spin()   -- forward-declared via function statement so check_ready c
         fill(1,4,CW,5,bg)
         if i%2==0 then
             centre(4,"  "..result.."  "..rb_str.."  ",colors.white,bg)
-            centre(5,string.rep("=",math.min(CW-4,20)),colors.white,bg)
+            centre(5,string.rep("\x9f",math.min(CW-4,20)),colors.white,bg)
         end
         sleep(0.09)
     end
@@ -650,9 +650,9 @@ function do_spin()   -- forward-declared via function statement so check_ready c
                 local wfc={colors.lime,colors.green,colors.yellow,colors.lime,colors.green,colors.lime,colors.yellow,colors.lime}
                 for _,fc in ipairs(wfc) do
                     fill(1,1,CW,CH,fc)
-                    centre(math.floor(CH/2)-1,string.rep("*",math.min(CW-2,26)),colors.black,fc)
+                    centre(math.floor(CH/2)-1,string.rep("\x9f",math.min(CW-2,26)),colors.black,fc)
                     centre(math.floor(CH/2),  "  WIN!  +"..ps.last_net.."c  ",      colors.black,fc)
-                    centre(math.floor(CH/2)+1,string.rep("*",math.min(CW-2,26)),colors.black,fc)
+                    centre(math.floor(CH/2)+1,string.rep("\x9f",math.min(CW-2,26)),colors.black,fc)
                     sleep(0.07)
                 end
             end

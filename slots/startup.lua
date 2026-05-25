@@ -127,18 +127,27 @@ local function abtn(st,x1,y1,x2,y2,id,label,bg,fg)
 end
 
 local function draw_reel(st,cx,cy,sym,stopped,flash_col)
-    local bg  = flash_col or (stopped and sym.bg or colors.lightGray)
-    local sfg = flash_col and colors.black or (stopped and sym.fg or colors.gray)
-    fill(st,cx,cy,cx+REEL_W-1,cy+2,bg)
-    st.mon.setBackgroundColor(bg)
-    st.mon.setTextColor(stopped and colors.black or colors.gray)
-    st.mon.setCursorPos(cx,  cy);   st.mon.write("+"..string.rep("-",REEL_W-2).."+")
-    st.mon.setCursorPos(cx,  cy+1); st.mon.write("|"..string.rep(" ",REEL_W-2).."|")
-    st.mon.setCursorPos(cx,  cy+2); st.mon.write("+"..string.rep("-",REEL_W-2).."+")
+    local cellbg = flash_col or (stopped and sym.bg or colors.gray)
+    local cellfg = flash_col and colors.black or (stopped and sym.fg or colors.white)
+    -- top strip: \x9f (solid teletext block) in cell colour on black
+    st.mon.setTextColor(cellbg); st.mon.setBackgroundColor(colors.black)
+    st.mon.setCursorPos(cx,cy); st.mon.write(string.rep("\x9f",REEL_W))
+    -- symbol row
+    fill(st,cx,cy+1,cx+REEL_W-1,cy+1,cellbg)
     local sx = cx + math.floor((REEL_W-#sym.disp)/2)
-    st.mon.setTextColor(sfg); st.mon.setBackgroundColor(bg)
+    st.mon.setTextColor(cellfg); st.mon.setBackgroundColor(cellbg)
     st.mon.setCursorPos(sx,cy+1)
-    st.mon.write((stopped or flash_col) and sym.disp or "~~~")
+    if stopped or flash_col then
+        st.mon.write(sym.disp)
+    else
+        -- spinning blur: shade blocks in dark grey
+        st.mon.setTextColor(colors.darkGray); st.mon.setBackgroundColor(colors.gray)
+        st.mon.setCursorPos(cx,cy+1)
+        st.mon.write(string.rep("\x7f",REEL_W))
+    end
+    -- bottom strip
+    st.mon.setTextColor(cellbg); st.mon.setBackgroundColor(colors.black)
+    st.mon.setCursorPos(cx,cy+2); st.mon.write(string.rep("\x9f",REEL_W))
 end
 
 -- ── wallet ────────────────────────────────────────────────────────────────────
@@ -196,13 +205,14 @@ local function render(st, disp_reels, stopped_flags)
     local hc1 = HDR_COLS[t+1]
     local hc2 = HDR_COLS[t2+1]
     fill(st,1,1,W,1,hc1)
-    local stars = string.rep("*", math.max(0,math.floor((W-16)/2)))
+    local stars = string.rep("\x9f", math.max(0,math.floor((W-16)/2)))
     centre(st,1, stars.."  LUCKY SLOTS  "..stars, colors.black, hc1)
-    fill(st,1,2,W,2,hc2)
-    -- alternating sparkle bar on header row 2
-    local bar = ""
-    for i=1,W do bar=bar..(i%4==0 and "*" or "=") end
-    mp(st,1,2, bar:sub(1,W), colors.black, hc2)
+    -- alternating \x9f blocks with swapped fg/bg per column — two-colour weave
+    for i=1,W do
+        st.mon.setTextColor(i%2==0 and hc1 or hc2)
+        st.mon.setBackgroundColor(i%2==0 and hc2 or hc1)
+        st.mon.setCursorPos(i,2); st.mon.write("\x9f")
+    end
 
     -- balance row
     fill(st,1,3,W,3,colors.black)
@@ -324,11 +334,11 @@ local function do_spin(st)
                   colors.orange,colors.yellow,colors.lime,colors.yellow,colors.orange}
         for _,c in ipairs(jc) do
             fill(st,1,1,st.W,st.H,c)
-            centre(st,math.floor(st.H/2)-2, string.rep("*",st.W-2), colors.black,c)
+            centre(st,math.floor(st.H/2)-2, string.rep("\x9f",st.W-2), colors.black,c)
             centre(st,math.floor(st.H/2)-1, "  JACKPOT!!!  ",          colors.black,c)
             centre(st,math.floor(st.H/2),   "  +"..win.." CHIPS!  ",   colors.black,c)
             centre(st,math.floor(st.H/2)+1, "   7   7   7   ",         colors.black,c)
-            centre(st,math.floor(st.H/2)+2, string.rep("*",st.W-2), colors.black,c)
+            centre(st,math.floor(st.H/2)+2, string.rep("\x9f",st.W-2), colors.black,c)
             sleep(0.15)
         end
         sleep(1.2)
@@ -338,9 +348,9 @@ local function do_spin(st)
                   colors.lime,colors.green,colors.lime,colors.green}
         for _,fc in ipairs(wc) do
             fill(st,1,1,st.W,st.H,fc)
-            centre(st,math.floor(st.H/2)-1, string.rep("*",st.W-2), colors.black,fc)
+            centre(st,math.floor(st.H/2)-1, string.rep("\x9f",st.W-2), colors.black,fc)
             centre(st,math.floor(st.H/2),   "  WIN!  +"..win.."c  ",   colors.black,fc)
-            centre(st,math.floor(st.H/2)+1, string.rep("*",st.W-2), colors.black,fc)
+            centre(st,math.floor(st.H/2)+1, string.rep("\x9f",st.W-2), colors.black,fc)
             sleep(0.1)
         end
         sleep(0.4)
