@@ -11,6 +11,15 @@
 --   Player names are typed on the computer keyboard; everything else is
 --   driven by tapping the monitor.
 
+pcall(function()
+    local au = dofile("/casino/lib/autoupdate.lua")
+    au.check({
+        {"/lib/autoupdate.lua",    "/casino/lib/autoupdate.lua"},
+        {"/lib/wallet.lua",        "/casino/lib/wallet.lua"},
+        {"/cashier/startup.lua",   "/casino/cashier/startup.lua"},
+    })
+end)
+
 local wallet = dofile("/casino/lib/wallet.lua")
 
 local mon = peripheral.find("monitor")

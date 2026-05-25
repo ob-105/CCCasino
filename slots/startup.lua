@@ -2,6 +2,15 @@
 -- Three-reel slot machine with animated reels and win effects.
 -- Hardware: monitor (any side), disk drive (any side)
 
+pcall(function()
+    local au = dofile("/casino/lib/autoupdate.lua")
+    au.check({
+        {"/lib/autoupdate.lua",   "/casino/lib/autoupdate.lua"},
+        {"/lib/wallet.lua",       "/casino/lib/wallet.lua"},
+        {"/slots/startup.lua",    "/casino/slots/startup.lua"},
+    })
+end)
+
 local wallet = dofile("/casino/lib/wallet.lua")
 math.randomseed(os.epoch("utc"))
 

@@ -111,9 +111,10 @@ hr()
 
 local ok = true
 
--- wallet library (needed on every casino computer)
+-- common libraries (needed on every casino computer)
 print("Common files:")
-ok = dl("/lib/wallet.lua", "/casino/lib/wallet.lua") and ok
+ok = dl("/lib/autoupdate.lua", "/casino/lib/autoupdate.lua") and ok
+ok = dl("/lib/wallet.lua",     "/casino/lib/wallet.lua")     and ok
 
 -- computer-specific files
 print("Game files:")

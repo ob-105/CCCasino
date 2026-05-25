@@ -11,6 +11,15 @@
 --
 -- Each monitor and disk drive needs its own wired modem attached to join the network.
 
+pcall(function()
+    local au = dofile("/casino/lib/autoupdate.lua")
+    au.check({
+        {"/lib/autoupdate.lua",   "/casino/lib/autoupdate.lua"},
+        {"/lib/wallet.lua",       "/casino/lib/wallet.lua"},
+        {"/roulette/table.lua",   "/casino/roulette/table.lua"},
+    })
+end)
+
 local NUM_SEATS  = 4
 local SPIN_DELAY = 30
 

@@ -4,6 +4,15 @@
 -- Modem:   wireless, listens ch10, broadcasts ch11
 -- Run: dealer [num_players]   default 4
 
+pcall(function()
+    local au = dofile("/casino/lib/autoupdate.lua")
+    au.check({
+        {"/lib/autoupdate.lua",  "/casino/lib/autoupdate.lua"},
+        {"/lib/wallet.lua",      "/casino/lib/wallet.lua"},
+        {"/poker/dealer.lua",    "/casino/poker/dealer.lua"},
+    })
+end)
+
 local NUM_PLAYERS = tonumber(arg and arg[1]) or 4
 local START_CHIPS = 500   -- fallback for players without a wallet disk
 local SMALL_BLIND = 5

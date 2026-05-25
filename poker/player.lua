@@ -5,6 +5,15 @@
 --   Foot monitor:   monitor on the LEFT or RIGHT side (whichever is present)
 -- If no top monitor is found, falls back to the first monitor available.
 
+pcall(function()
+    local au = dofile("/casino/lib/autoupdate.lua")
+    au.check({
+        {"/lib/autoupdate.lua",  "/casino/lib/autoupdate.lua"},
+        {"/lib/wallet.lua",      "/casino/lib/wallet.lua"},
+        {"/poker/player.lua",    "/casino/poker/player.lua"},
+    })
+end)
+
 local pid = tonumber(arg and arg[1])
 assert(pid and pid>=1 and pid<=4, "Usage: player <1-4>")
 
