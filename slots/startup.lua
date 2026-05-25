@@ -1,61 +1,33 @@
 -- slots/startup.lua
--- Three-reel slot machine with animated reels and win effects.
--- Hardware: monitor (any side), disk drive (any side)
+-- One computer drives up to 4 independent slot machine stations.
+-- Hardware per station: wired modem on a side (bottom/right/left/top)
+--   connected to a monitor + disk drive on that wired network.
 
 pcall(function()
     local au = dofile("/casino/lib/autoupdate.lua")
     au.check({
-        {"/lib/autoupdate.lua",   "/casino/lib/autoupdate.lua"},
-        {"/lib/wallet.lua",       "/casino/lib/wallet.lua"},
-        {"/slots/startup.lua",    "/casino/slots/startup.lua"},
+        {"/lib/autoupdate.lua", "/casino/lib/autoupdate.lua"},
+        {"/lib/wallet.lua",     "/casino/lib/wallet.lua"},
+        {"/slots/startup.lua",  "/casino/slots/startup.lua"},
     })
 end)
 
 local wallet = dofile("/casino/lib/wallet.lua")
 math.randomseed(os.epoch("utc"))
 
-local mon = peripheral.find("monitor")
-assert(mon, "Attach a monitor to the slots computer")
-mon.setTextScale(0.5)
-local W, H = mon.getSize()
-
-local drv = wallet.find_drive()
-
--- ── wallet ────────────────────────────────────────────────────────────────────
-local wd, chips = nil, 0
-
-local function refresh_wallet()
-    wd, chips = nil, 0
-    if drv and disk.isPresent(drv) then
-        local w = wallet.load(drv)
-        if w then wd=w; chips=w.balance end
-    end
-end
-
-local function flush_wallet()
-    if not wd then return end
-    wd.balance = chips; wallet.save(wd, drv)
-end
-
-refresh_wallet()
-
--- ── symbols ───────────────────────────────────────────────────────────────────
+-- ── symbols & payouts ─────────────────────────────────────────────────────────
 local SYMS = {
-    { key="7",   disp=" 7 ", col=colors.yellow,  weight=3  },
-    { key="BAR", disp="BAR", col=colors.white,   weight=5  },
-    { key="BEL", disp="BEL", col=colors.orange,  weight=5  },
-    { key="CHR", disp="CHR", col=colors.red,     weight=6  },
-    { key="LEM", disp="LEM", col=colors.lime,    weight=6  },
+    { key="7",   disp=" 7 ", fg=colors.black, bg=colors.yellow, weight=3 },
+    { key="BAR", disp="BAR", fg=colors.black, bg=colors.white,  weight=5 },
+    { key="BEL", disp="BEL", fg=colors.black, bg=colors.orange, weight=5 },
+    { key="CHR", disp="CHR", fg=colors.white, bg=colors.red,    weight=6 },
+    { key="LEM", disp="LEM", fg=colors.black, bg=colors.lime,   weight=6 },
 }
 local POOL = {}
-for _, s in ipairs(SYMS) do
-    for _ = 1, s.weight do POOL[#POOL+1] = s end
-end
+for _, s in ipairs(SYMS) do for _=1,s.weight do POOL[#POOL+1]=s end end
 local function rsym() return POOL[math.random(#POOL)] end
 
--- ── payouts ───────────────────────────────────────────────────────────────────
-local THREE_MULT = { ["7"]=50, BAR=20, BEL=10, CHR=8, LEM=5 }
-
+local THREE_MULT = {["7"]=50, BAR=20, BEL=10, CHR=8, LEM=5}
 local function calc_win(s1,s2,s3,bet)
     local k1,k2,k3 = s1.key,s2.key,s3.key
     if k1==k2 and k2==k3 then return bet*(THREE_MULT[k1] or 3) end
@@ -66,237 +38,370 @@ local function calc_win(s1,s2,s3,bet)
     return 0
 end
 
--- ── state ─────────────────────────────────────────────────────────────────────
 local BET_OPTS = {1,5,10,25,50,100,500}
-local bet      = 10
-local reels    = { SYMS[4], SYMS[1], SYMS[3] }
-local last_win = nil
-local spinning = false
-local btns     = {}
+local REEL_W   = 9  -- each reel is this many characters wide (includes borders)
 
--- ── drawing ───────────────────────────────────────────────────────────────────
-local function fill(x1,y1,x2,y2,bg)
-    mon.setBackgroundColor(bg)
-    local row=string.rep(" ",x2-x1+1)
-    for y=y1,y2 do mon.setCursorPos(x1,y); mon.write(row) end
-end
-local function mp(x,y,s,fg,bg)
-    if bg then mon.setBackgroundColor(bg) end
-    if fg then mon.setTextColor(fg) end
-    mon.setCursorPos(x,y); mon.write(s)
-end
-local function centre(y,s,fg,bg)
-    if bg then mon.setBackgroundColor(bg) end
-    if fg then mon.setTextColor(fg) end
-    mon.setCursorPos(math.floor((W-#s)/2)+1,y); mon.write(s)
-end
-local function abtn(x1,y1,x2,y2,id,label,bg,fg)
-    fill(x1,y1,x2,y2,bg)
-    mp(x1+math.floor((x2-x1+1-#label)/2),y1+math.floor((y2-y1)/2),label,fg,bg)
-    btns[#btns+1]={x1=x1,y1=y1,x2=x2,y2=y2,id=id}
+-- ── station discovery ─────────────────────────────────────────────────────────
+local SIDES = {"bottom","right","left","top"}
+local stations   = {}
+local mon_to_st  = {}
+
+for _, side in ipairs(SIDES) do
+    if peripheral.getType(side) == "modem" then
+        local modem = peripheral.wrap(side)
+        if modem.getNamesRemote then   -- wired modems only
+            local mon_name, drv_name = nil, nil
+            for _, name in ipairs(modem.getNamesRemote()) do
+                local t = peripheral.getType(name)
+                if t == "monitor" and not mon_name then mon_name = name end
+                if t == "drive"   and not drv_name then drv_name = name end
+            end
+            if mon_name then
+                local mon = peripheral.wrap(mon_name)
+                for _, s in ipairs({3,2.5,2,1.5,1,0.5}) do
+                    mon.setTextScale(s)
+                    local w,h = mon.getSize()
+                    if w >= 26 and h >= 12 then break end
+                end
+                local W,H = mon.getSize()
+                local st = {
+                    side=side, mon_name=mon_name, mon=mon, drv=drv_name,
+                    W=W, H=H,
+                    bet=10, reels={SYMS[4],SYMS[1],SYMS[3]},
+                    last_win=nil, spinning=false, btns={},
+                    wd=nil, chips=0,
+                }
+                stations[#stations+1] = st
+                mon_to_st[mon_name]   = st
+            end
+        end
+    end
 end
 
--- Draw one reel cell: 9 wide × 3 tall for maximum visual impact.
-local REEL_W, REEL_H = 9, 3
-local function draw_reel(cx,cy,sym,stopped,flash_col)
-    local bg = flash_col or (stopped and colors.white or colors.lightGray)
-    local border_col = stopped and colors.black or colors.gray
-    fill(cx,cy,cx+REEL_W-1,cy+REEL_H-1,bg)
-    mon.setBackgroundColor(bg); mon.setTextColor(border_col)
-    mon.setCursorPos(cx,cy);    mon.write("\xd5"..string.rep("\xcd",REEL_W-2).."\xb8")
-    mon.setCursorPos(cx,cy+1);  mon.write("\xb3"..string.rep(" ",REEL_W-2).."\xb3")
-    mon.setCursorPos(cx,cy+2);  mon.write("\xd4"..string.rep("\xcd",REEL_W-2).."\xbe")
-    -- symbol centred in the cell
-    mon.setTextColor(sym.col)
+-- fallback: direct peripherals (single-machine / dev mode)
+if #stations == 0 then
+    local mon = peripheral.find("monitor")
+    if mon then
+        mon.setTextScale(1)
+        local W,H = mon.getSize()
+        local drv_obj = peripheral.find("drive")
+        local drv = drv_obj and peripheral.getName(drv_obj) or nil
+        local mn  = peripheral.getName(mon)
+        local st  = {
+            side="direct", mon_name=mn, mon=mon, drv=drv,
+            W=W, H=H,
+            bet=10, reels={SYMS[4],SYMS[1],SYMS[3]},
+            last_win=nil, spinning=false, btns={},
+            wd=nil, chips=0,
+        }
+        stations[1] = st
+        mon_to_st[mn] = st
+    end
+end
+
+assert(#stations > 0, "No slot machine stations found. Attach wired modems with monitors.")
+
+-- ── drawing helpers ───────────────────────────────────────────────────────────
+local function fill(st,x1,y1,x2,y2,bg)
+    st.mon.setBackgroundColor(bg)
+    local row = string.rep(" ", math.max(0,x2-x1+1))
+    for y=y1,y2 do st.mon.setCursorPos(x1,y); st.mon.write(row) end
+end
+local function mp(st,x,y,s,fg,bg)
+    if bg then st.mon.setBackgroundColor(bg) end
+    if fg then st.mon.setTextColor(fg) end
+    st.mon.setCursorPos(x,y); st.mon.write(s)
+end
+local function centre(st,y,s,fg,bg)
+    if bg then st.mon.setBackgroundColor(bg) end
+    if fg then st.mon.setTextColor(fg) end
+    local x = math.max(1, math.floor((st.W-#s)/2)+1)
+    st.mon.setCursorPos(x,y); st.mon.write(s)
+end
+local function abtn(st,x1,y1,x2,y2,id,label,bg,fg)
+    fill(st,x1,y1,x2,y2,bg)
+    local lx = x1 + math.floor((x2-x1+1-#label)/2)
+    local ly = y1 + math.floor((y2-y1)/2)
+    mp(st,lx,ly,label,fg,bg)
+    st.btns[#st.btns+1] = {x1=x1,y1=y1,x2=x2,y2=y2,id=id}
+end
+
+local function draw_reel(st,cx,cy,sym,stopped,flash_col)
+    local bg  = flash_col or (stopped and sym.bg or colors.lightGray)
+    local sfg = flash_col and colors.black or (stopped and sym.fg or colors.gray)
+    fill(st,cx,cy,cx+REEL_W-1,cy+2,bg)
+    st.mon.setBackgroundColor(bg)
+    st.mon.setTextColor(stopped and colors.black or colors.gray)
+    st.mon.setCursorPos(cx,  cy);   st.mon.write("\xd5"..string.rep("\xcd",REEL_W-2).."\xb8")
+    st.mon.setCursorPos(cx,  cy+1); st.mon.write("\xb3"..string.rep(" ",REEL_W-2).."\xb3")
+    st.mon.setCursorPos(cx,  cy+2); st.mon.write("\xd4"..string.rep("\xcd",REEL_W-2).."\xbe")
     local sx = cx + math.floor((REEL_W-#sym.disp)/2)
-    mon.setCursorPos(sx,cy+1); mon.write(sym.disp)
+    st.mon.setTextColor(sfg); st.mon.setBackgroundColor(bg)
+    st.mon.setCursorPos(sx,cy+1)
+    st.mon.write((stopped or flash_col) and sym.disp or "~~~")
 end
 
--- ── win effects ───────────────────────────────────────────────────────────────
-local function jackpot_anim(win_amount)
-    local cols = {colors.yellow,colors.orange,colors.yellow,colors.lime,colors.yellow,colors.orange}
-    for i=1,#cols do
-        fill(1,1,W,H,cols[i])
-        centre(math.floor(H/2)-2, string.rep("\x01",W-4),         colors.black, cols[i])
-        centre(math.floor(H/2)-1, "  \x01\x01  JACKPOT!  \x01\x01  ",    colors.black, cols[i])
-        centre(math.floor(H/2),   "   +"..win_amount.." CHIPS!!!  ",       colors.black, cols[i])
-        centre(math.floor(H/2)+1, "   7   7   7   ",                       colors.black, cols[i])
-        centre(math.floor(H/2)+2, string.rep("\x01",W-4),         colors.black, cols[i])
-        sleep(0.18)
-    end
-    sleep(1.0)
-end
-
-local function win_flash(reels_result, win_amount)
-    local rx = math.floor((W-(3*REEL_W+2*2))/2)+1
-    local ry = 4
-    for i=1,4 do
-        local flash = i%2==0 and colors.lime or colors.green
-        for j=1,3 do draw_reel(rx+(j-1)*(REEL_W+2),ry,reels_result[j],true,flash) end
-        sleep(0.12)
+-- ── wallet ────────────────────────────────────────────────────────────────────
+local function refresh_wallet(st)
+    st.wd, st.chips = nil, 0
+    if st.drv and disk.isPresent(st.drv) then
+        local w = wallet.load(st.drv)
+        if w then st.wd=w; st.chips=w.balance end
     end
 end
+local function flush_wallet(st)
+    if not st.wd then return end
+    st.wd.balance = st.chips
+    wallet.save(st.wd, st.drv)
+end
 
--- ── render ────────────────────────────────────────────────────────────────────
+-- ── layout ────────────────────────────────────────────────────────────────────
+-- Fixed rows (works for H >= 12):
+--   1-2  : animated header
+--   3    : balance / disk status
+--   4-6  : reels  (REEL_H = 3)
+--   5    : payline (middle of reels)
+--   8    : win / loss result
+--   9    : bet selector
+--   10-11: spin button  (or 10 only if H <= 12)
+--   12+  : payout table if room
+--   H    : LEAVE button
+local L = { hdr1=1, hdr2=2, bal=3, ry=4, pl=5, res=8, by=9, sy=10 }
+
+local HDR_COLS = {
+    colors.red, colors.orange, colors.yellow, colors.lime,
+    colors.green, colors.cyan, colors.blue, colors.purple,
+    colors.magenta, colors.pink,
+}
 local PAYOUT_LINES = {
-    " 7 7 7  \xd7 50  JACKPOT",
+    " 7  7  7  \xd7 50    JACKPOT!",
     " BAR BAR BAR  \xd7 20",
     " BEL BEL BEL  \xd7 10",
     " CHR CHR CHR  \xd7 8",
     " LEM LEM LEM  \xd7 5",
-    " Two 7s  \xd7 5 | Pair  \xd7 2 | Cherry  \xd7 1",
+    " Two 7s \xd7 5 | Pair \xd7 2 | Cherry \xd7 1",
 }
 
-local function render(disp_reels,stopped_flags)
-    mon.setBackgroundColor(colors.black); mon.clear()
-    btns={}
-    disp_reels    = disp_reels    or reels
+-- ── render ────────────────────────────────────────────────────────────────────
+local function render(st, disp_reels, stopped_flags)
+    st.mon.setBackgroundColor(colors.black); st.mon.clear()
+    st.btns = {}
+    disp_reels    = disp_reels    or st.reels
     stopped_flags = stopped_flags or {true,true,true}
+    local W, H = st.W, st.H
 
-    -- decorative header
-    fill(1,1,W,1,colors.yellow)
-    local stars = string.rep("\x04",math.floor((W-20)/2))
-    centre(1, stars.."  LUCKY  SLOTS  "..stars, colors.black, colors.yellow)
+    -- animated header
+    local t  = math.floor(os.epoch("utc") / 250) % #HDR_COLS
+    local t2 = (t+1) % #HDR_COLS
+    local hc1 = HDR_COLS[t+1]
+    local hc2 = HDR_COLS[t2+1]
+    fill(st,1,1,W,1,hc1)
+    local stars = string.rep("\x0f", math.max(0,math.floor((W-16)/2)))
+    centre(st,1, stars.."  LUCKY SLOTS  "..stars, colors.black, hc1)
+    fill(st,1,2,W,2,hc2)
+    -- alternating sparkle bar on header row 2
+    local bar = ""
+    for i=1,W do bar=bar..(i%4==0 and "\x04" or "\xcd") end
+    mp(st,1,2, bar:sub(1,W), colors.black, hc2)
 
-    -- balance / disk
-    fill(1,2,W,2,colors.black)
-    if wd then
-        mp(2,2,"\x10 "..chips.." chips",colors.white,colors.black)
-        mp(W-8,2,"[disk ok]",colors.lime,colors.black)
+    -- balance row
+    fill(st,1,3,W,3,colors.black)
+    if st.wd then
+        local name = (st.wd.player_name or "Player"):sub(1,12)
+        mp(st,2,3, "\x10 "..name, colors.white, colors.black)
+        local cs = st.chips.."c"
+        mp(st,W-#cs-1,3, cs, colors.yellow, colors.black)
     else
-        mp(2,2,"!! NO DISK -- chips not saved !!",colors.orange,colors.black)
+        centre(st,3, "  Insert chip disk  ", colors.orange, colors.black)
     end
 
-    -- reels (3 × REEL_W with 2-char gaps, centred)
-    local rx = math.floor((W-(3*REEL_W+2*2))/2)+1
-    local ry = 4
+    -- reels
+    local rx = math.floor((W-(3*REEL_W+4))/2)+1
     for i=1,3 do
-        draw_reel(rx+(i-1)*(REEL_W+2), ry, disp_reels[i], stopped_flags[i])
+        draw_reel(st, rx+(i-1)*(REEL_W+2), L.ry, disp_reels[i], stopped_flags[i])
     end
+    -- payline arrows
+    st.mon.setBackgroundColor(colors.black); st.mon.setTextColor(colors.yellow)
+    st.mon.setCursorPos(1,L.pl); st.mon.write("\x10")
+    st.mon.setCursorPos(W,L.pl); st.mon.write("\x11")
 
-    -- payline indicator ─────────────────────────────────────────────────────────
-    local pl_y = ry+1  -- middle row of reels = payline
-    mon.setBackgroundColor(colors.black)
-    mon.setTextColor(colors.yellow)
-    mon.setCursorPos(1,pl_y); mon.write("\x10")
-    mon.setCursorPos(W,pl_y); mon.write("\x11")
-
-    -- win / loss indicator
-    local res_y = ry+REEL_H+1
-    fill(1,res_y,W,res_y,colors.black)
-    if last_win ~= nil then
-        if last_win > 0 then
-            centre(res_y,"  \x01  WIN!  +"..last_win.." chips  \x01  ",colors.black,colors.lime)
+    -- win/loss result
+    fill(st,1,L.res,W,L.res,colors.black)
+    if st.last_win ~= nil then
+        if st.last_win > 0 then
+            centre(st,L.res, "  \x01  WIN!  +"..st.last_win.."c  \x01  ", colors.black, colors.lime)
         else
-            centre(res_y,"  No win this spin  ",colors.gray,colors.black)
+            centre(st,L.res, "  No win this spin  ", colors.gray, colors.black)
         end
     end
 
-    -- bet selector
-    local by = res_y+2
-    fill(1,by,W,by,colors.black)
-    mp(2,by,"BET:",colors.lightGray,colors.black)
+    -- bet row
+    fill(st,1,L.by,W,L.by,colors.black)
+    mp(st,2,L.by, "BET:", colors.lightGray, colors.black)
     local bx=7
     for _,b in ipairs(BET_OPTS) do
-        local lbl=tostring(b)
-        local bw=#lbl+2
-        local sel=b==bet
-        abtn(bx,by,bx+bw-1,by,"bet_"..b,lbl,sel and colors.orange or colors.gray,sel and colors.black or colors.white)
-        bx=bx+bw+1
+        local lbl=tostring(b); local bw=#lbl+2
+        if bx+bw <= W-1 then
+            local sel=b==st.bet
+            abtn(st, bx,L.by, bx+bw-1,L.by, "bet_"..b, lbl,
+                sel and colors.orange or colors.gray,
+                sel and colors.black  or colors.white)
+            bx=bx+bw+1
+        end
     end
 
     -- spin button
-    local sy=by+2
-    if spinning then
-        fill(1,sy,W,sy+1,colors.black)
-        centre(sy,"  \x1b \x1b  SPINNING...  \x1a \x1a  ",colors.yellow,colors.black)
-    elseif chips>=bet then
-        local lbl="  \x10  SPIN  "..bet.."c  \x11  "
-        abtn(math.floor(W/2)-#lbl/2,sy,math.floor(W/2)+#lbl/2,sy+1,"spin",lbl,colors.green,colors.black)
-    else
-        fill(1,sy,W,sy+1,colors.black)
-        centre(sy,"Not enough chips (need "..bet..")",colors.red,colors.black)
-    end
-
-    -- payout table (if there's room)
-    local py=sy+3
-    if py+#PAYOUT_LINES<=H-1 then
-        fill(1,py-1,W,H-1,colors.black)
-        mp(2,py-1,"Payouts:",colors.gray,colors.black)
-        for i,line in ipairs(PAYOUT_LINES) do
-            mp(3,py+i-1,line,colors.lightGray,colors.black)
+    local sh = H <= 12 and 1 or 2
+    if L.sy+sh-1 <= H-1 then
+        if st.spinning then
+            fill(st,1,L.sy,W,L.sy+sh-1,colors.black)
+            centre(st,L.sy, "  \x1b\x1b  SPINNING...  \x1a\x1a  ", colors.yellow, colors.black)
+        elseif not st.wd then
+            fill(st,1,L.sy,W,L.sy+sh-1,colors.black)
+        elseif st.chips >= st.bet then
+            local lbl="  \x10  SPIN  "..st.bet.."c  \x11  "
+            local bx2=math.max(1,math.floor((W-#lbl)/2)+1)
+            local ex=math.min(W,bx2+#lbl-1)
+            abtn(st, bx2,L.sy, ex,L.sy+sh-1, "spin", lbl, colors.green, colors.black)
+        else
+            fill(st,1,L.sy,W,L.sy+sh-1,colors.black)
+            centre(st,L.sy, "  Need "..st.bet.."c to spin  ", colors.red, colors.black)
         end
     end
 
-    -- leave
-    abtn(1,H,math.floor(W/3),H,"leave","LEAVE TABLE",colors.purple,colors.white)
+    -- payout table (if room below spin button)
+    local py = L.sy + sh + 1
+    if py + #PAYOUT_LINES <= H-1 then
+        fill(st,1,py-1,W,H-1,colors.black)
+        mp(st,2,py-1,"Payouts:",colors.gray,colors.black)
+        for i,line in ipairs(PAYOUT_LINES) do
+            mp(st,3,py+i-1, line, colors.lightGray, colors.black)
+        end
+    end
+
+    -- leave button
+    abtn(st,1,H, math.max(2,math.floor(W/5)),H, "leave","LEAVE",colors.purple,colors.white)
 end
 
 -- ── spin ──────────────────────────────────────────────────────────────────────
-local function do_spin()
-    if chips<bet or spinning then return end
-    spinning=true
-    chips=chips-bet
+local function do_spin(st)
+    if st.chips < st.bet or st.spinning then return end
+    st.spinning = true
+    st.chips    = st.chips - st.bet
 
-    local result   = {rsym(),rsym(),rsym()}
-    local display  = {rsym(),rsym(),rsym()}
-    local stopped  = {false,false,false}
-    local stop_at  = {16,22,28}
+    local result  = {rsym(),rsym(),rsym()}
+    local display = {rsym(),rsym(),rsym()}
+    local stopped = {false,false,false}
+    local stop_at = {16,22,28}
 
     for tick=1,30 do
         for i=1,3 do
-            if tick>=stop_at[i] then
-                stopped[i]=true; display[i]=result[i]
-            else
-                display[i]=rsym()
-            end
+            if tick >= stop_at[i] then stopped[i]=true; display[i]=result[i]
+            else display[i]=rsym() end
         end
-        render(display,stopped)
+        render(st,display,stopped)
         sleep(0.04+tick*0.005)
     end
 
-    local win=calc_win(result[1],result[2],result[3],bet)
-    chips=chips+win
-    last_win=win
-    reels=result
+    local win = calc_win(result[1],result[2],result[3],st.bet)
+    st.chips = st.chips + win
+    st.last_win = win
+    st.reels = result
 
-    -- celebratory effects
-    if win>=bet*50 then
-        jackpot_anim(win)
-    elseif win>0 then
-        win_flash(result, win)
+    -- per-reel landing bounce
+    local rx = math.floor((st.W-(3*REEL_W+4))/2)+1
+    for j=1,3 do
+        for i=1,4 do
+            local fc = i%2==0 and result[j].bg or colors.lightGray
+            draw_reel(st, rx+(j-1)*(REEL_W+2), L.ry, result[j], true, fc)
+            sleep(0.07)
+        end
     end
 
-    flush_wallet()
-    spinning=false
-    render()
+    if win >= st.bet*50 then
+        -- JACKPOT: 10-frame full-screen color blast
+        local jc={colors.yellow,colors.orange,colors.yellow,colors.lime,colors.yellow,
+                  colors.orange,colors.yellow,colors.lime,colors.yellow,colors.orange}
+        for _,c in ipairs(jc) do
+            fill(st,1,1,st.W,st.H,c)
+            centre(st,math.floor(st.H/2)-2, string.rep("\x01",st.W-2), colors.black,c)
+            centre(st,math.floor(st.H/2)-1, "  JACKPOT!!!  ",          colors.black,c)
+            centre(st,math.floor(st.H/2),   "  +"..win.." CHIPS!  ",   colors.black,c)
+            centre(st,math.floor(st.H/2)+1, "   7   7   7   ",         colors.black,c)
+            centre(st,math.floor(st.H/2)+2, string.rep("\x01",st.W-2), colors.black,c)
+            sleep(0.15)
+        end
+        sleep(1.2)
+    elseif win > 0 then
+        -- win: 8-frame green/lime flash
+        local wc={colors.lime,colors.green,colors.lime,colors.green,
+                  colors.lime,colors.green,colors.lime,colors.green}
+        for _,fc in ipairs(wc) do
+            fill(st,1,1,st.W,st.H,fc)
+            centre(st,math.floor(st.H/2)-1, string.rep("\x01",st.W-2), colors.black,fc)
+            centre(st,math.floor(st.H/2),   "  WIN!  +"..win.."c  ",   colors.black,fc)
+            centre(st,math.floor(st.H/2)+1, string.rep("\x01",st.W-2), colors.black,fc)
+            sleep(0.1)
+        end
+        sleep(0.4)
+    end
+
+    flush_wallet(st)
+    st.spinning = false
+    render(st)
 end
 
--- ─�� input ─────────────────────────────────────────────────────────────────────
-local function handle_touch(x,y)
-    for _,b in ipairs(btns) do
+-- ── touch ─────────────────────────────────────────────────────────────────────
+local function handle_touch(st,x,y)
+    for _,b in ipairs(st.btns) do
         if x>=b.x1 and x<=b.x2 and y>=b.y1 and y<=b.y2 then
-            if b.id=="spin" and not spinning then
-                do_spin()
+            if b.id=="spin" and not st.spinning then
+                do_spin(st)
             elseif b.id=="leave" then
-                flush_wallet()
-                fill(1,1,W,H,colors.purple)
-                centre(math.floor(H/2),"Saved "..chips.."c to disk.  Goodbye!",colors.white,colors.purple)
-                sleep(2); error("player left")
+                flush_wallet(st)
+                fill(st,1,1,st.W,st.H,colors.purple)
+                centre(st,math.floor(st.H/2)-1,"  Saved "..st.chips.."c to disk  ",colors.white,colors.purple)
+                centre(st,math.floor(st.H/2),  "  Goodbye!  ",                     colors.white,colors.purple)
+                sleep(2)
+                refresh_wallet(st)
+                st.last_win = nil
+                render(st)
             elseif b.id:sub(1,4)=="bet_" then
-                bet=tonumber(b.id:sub(5)) or bet; render()
+                st.bet = tonumber(b.id:sub(5)) or st.bet
+                render(st)
             end
             return
         end
     end
 end
 
--- ── main loop ─────────────────────────────────────────────────────────────────
-render()
-while true do
-    local ev={os.pullEvent()}
-    if ev[1]=="monitor_touch" then handle_touch(ev[3],ev[4])
-    elseif ev[1]=="disk" or ev[1]=="disk_eject" then
-        refresh_wallet(); last_win=nil; render()
+-- ── per-station loop ──────────────────────────────────────────────────────────
+local function run_station(st)
+    refresh_wallet(st)
+    render(st)
+    local anim_tmr = os.startTimer(0.3)
+    while true do
+        local ev = {os.pullEvent()}
+        if ev[1]=="monitor_touch" and ev[2]==st.mon_name then
+            handle_touch(st,ev[3],ev[4])
+            anim_tmr = os.startTimer(0.3)
+        elseif (ev[1]=="disk" or ev[1]=="disk_eject") and ev[2]==st.drv then
+            refresh_wallet(st)
+            st.last_win = nil
+            render(st)
+            anim_tmr = os.startTimer(0.3)
+        elseif ev[1]=="timer" and ev[2]==anim_tmr then
+            if not st.spinning then render(st) end
+            anim_tmr = os.startTimer(0.3)
+        end
     end
+end
+
+-- ── launch ────────────────────────────────────────────────────────────────────
+if #stations == 1 then
+    run_station(stations[1])
+else
+    local tasks = {}
+    for _,st in ipairs(stations) do tasks[#tasks+1]=function() run_station(st) end end
+    parallel.waitForAll(table.unpack(tasks))
 end
