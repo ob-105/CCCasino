@@ -1,6 +1,6 @@
 -- slots/startup.lua
 -- One computer drives up to 4 independent slot machine stations.
--- Hardware per station: wired modem on a side (bottom/right/left/top)
+-- Hardware per station: wired modem on a side (back/right/left/front)
 --   connected to a monitor + disk drive on that wired network.
 
 pcall(function()
@@ -42,7 +42,7 @@ local BET_OPTS = {1,5,10,25,50,100,500}
 local REEL_W   = 9  -- each reel is this many characters wide (includes borders)
 
 -- ── station discovery ─────────────────────────────────────────────────────────
-local SIDES = {"bottom","right","left","top"}
+local SIDES = {"back","right","left","front"}
 local stations   = {}
 local mon_to_st  = {}
 
